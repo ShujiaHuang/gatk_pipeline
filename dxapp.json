@@ -82,7 +82,7 @@
   ],
   "runSpec":
     {"file": "runPipeline.py", "interpreter": "python2.7_old", "execDepends": [{"name": "openjdk-6-jre-headless"}, {"name":"tabix"}, {"name":"pypy"}]},
-  "version": "0.0.2",
+  "version": "0.0.3",
   "categories": [
     "Variation calling"
   ],
@@ -94,7 +94,7 @@
       "consensus_model",
       "lod_threshold",
       "entropy_threshold",
-      "max_consensus",
+      "max_consensuses",
       "max_insert_size_movement",
       "max_reads_consensus",
       "max_reads_realignment",
@@ -133,7 +133,9 @@
       "intervals_merging",
       "downsample_to_coverage",
       "downsample_to_fraction",
-      "nondeterministic"
+      "nondeterministic",
+      "mismatch_fraction",
+      "max_position_move"
     ],
     "upstreamAuthor": "Broad Institute",
     "upstreamVersion": "1.5-21-g979a84a",

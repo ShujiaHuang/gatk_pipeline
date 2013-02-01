@@ -78,8 +78,12 @@
     {"name": "recalibrated_mappings", "class": "gtable", "type": {"$and": ["LetterMappings", "Mappings", "gri"]}, "label": "Mappings", "help": "The deduplicated and recalibrated Mappings table object."},
     {"name": "variants", "class": "gtable", "type": {"$and": ["Variants", "gri"]}, "label": "Variants", "help": "The Variants table object containing the called variants."}
   ],
-  "runSpec":
-    {"file": "runPipeline.py", "interpreter": "python2.7_old", "execDepends": [{"name": "openjdk-6-jre-headless"}, {"name":"tabix"}, {"name":"pypy"}]},
+  "runSpec": {
+    "file": "runPipeline.py",
+    "interpreter": "python2.7_old",
+    "execDepends": [{"name": "openjdk-6-jre-headless"}, {"name":"tabix"}, {"name":"pypy"}],
+    "buildDepends": [{"name": "libncurses5-dev"}]
+  },
   "version": "0.0.3",
   "categories": [
     "Variation calling"

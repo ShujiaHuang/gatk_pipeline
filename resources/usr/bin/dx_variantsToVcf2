@@ -47,34 +47,34 @@ def main():
     outputFile = open(opts.file_name, 'w')
     exportRef = opts.export_ref_calls
     exportNoCall = opts.export_no_calls
-    
+
     variantsTable = dxpy.open_dxgtable(opts.variants_id)
-    
+
     global missingDefault
     missingDefault = -999999
-    
+
     refFileName = 'ref.txt'
     if opts.reference != None:
         refFileName = opts.reference
         if not os.path.isfile(refFileName):
             raise dxpy.AppError("The reference expected by variants to vcf script was not a valid file")
-    else:    
+    else:
         try:
             originalContigSet = variantsTable.get_details()['original_contigset']
         except:
             raise dxpy.AppError("The original reference genome must be attached as a detail")
-        
+
         contigDetails = dxpy.DXRecord(originalContigSet).get_details()
         dxpy.download_dxfile(contigDetails['flat_sequence_file']['$dnanexus_link'], 'ref.txt')
-    
- 
+
+
     if opts.write_header:
-    
+
        infos = variantsTable.get_details().get('infos')
        formats = variantsTable.get_details().get('formats')
        filters = variantsTable.get_details().get('filters')
        samples = variantsTable.get_details().get('samples')
-    
+
        outputFile.write("##fileformat=VCFv4.1\n")
        if infos != None:
            for k, v in collections.OrderedDict(sorted(infos.iteritems())).iteritems():
@@ -93,7 +93,7 @@ def main():
        for i in range(len(contigDetails['contigs']['names'])):
            outputFile.write("##contig=<ID="+contigDetails['contigs']['names'][i]+",length="+str(contigDetails['contigs']['sizes'][i])+">\n")
        outputFile.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")
-      
+
        if len(samples) > 0:
            outputFile.write("\tFORMAT")
            for x in samples:
@@ -103,15 +103,15 @@ def main():
     chromosomeOffsets = {}
     for i in range(len(contigDetails['contigs']['names'])):
         chromosomeOffsets[contigDetails['contigs']['names'][i]] = contigDetails['contigs']['offsets'][i]
-        
+
     contigSequence = open(refFileName,'r').read()
-    
+
     col = {}
-    names = variantsTable.get_col_names()   
+    names = variantsTable.get_col_names()
     for i in range(len(names)):
         col[names[i]] = i+1
     col = collections.OrderedDict(sorted(col.items()))
-    
+
     chromosomeList = contigDetails['contigs']['names']
     if opts.chr != None:
         intersection = []
@@ -119,7 +119,7 @@ def main():
             if x in opts.chr:
                 intersection.append(x)
         chromosomeList = intersection[:]
- 
+
     for chromosome in chromosomeList:
         lastPosition = -1
         buff = []
@@ -192,12 +192,12 @@ def writeRow(row, col, outputFile, contigSequence, chromosomeOffsets):
             filt = row[col["filter"]]
         else:
             filt = "PASS"
-            
+
     qual = '.'
     if col.get("qual") != None:
         if row[col["qual"]] != missingDefault:
             qual = row[col["qual"]]
-        
+
     #Check if any types are ins/del, if so pull out the character before as well.
     sample = 0
     printPreceedingCharacter = False
@@ -205,7 +205,7 @@ def writeRow(row, col, outputFile, contigSequence, chromosomeOffsets):
     for x in altOptions:
         if len(ref) != len(x) or len(ref) == 0 or len(alt) == 0:
             printPreceedingCharacter = True
-    
+
     if printPreceedingCharacter:
         ref = contigSequence[chromosomeOffsets[chr]+int(pos)-2]+ref
         altOptions = row[col["alt"]].split(",")
@@ -229,7 +229,7 @@ def writeRow(row, col, outputFile, contigSequence, chromosomeOffsets):
     if infos == '':
         infos = '.'
     outputFile.write("\t"+infos.rstrip(";"))
-    
+
     #Check whether the reserved fields coverage and total coverage are present, and put them into the info index if so
     sample = 0
     coverage = False
@@ -242,7 +242,7 @@ def writeRow(row, col, outputFile, contigSequence, chromosomeOffsets):
         if totalCoverage == False:
             totalCoverage = col.get("total_coverage_"+str(sample))
         sample += 1
-    
+
     #Check which info tags are present and use them to construct the info Index
     observedFormats = []
     for x in col:
@@ -263,7 +263,7 @@ def writeRow(row, col, outputFile, contigSequence, chromosomeOffsets):
         for x in observedFormats:
             formatOrdering += x+":"
         outputFile.write(formatOrdering.rstrip(":"))
-    
+
         sample = 0
         while 1:
             if col.get("type_"+str(sample)) != None:
@@ -302,7 +302,7 @@ def writeRow(row, col, outputFile, contigSequence, chromosomeOffsets):
                 break
             sample += 1
     outputFile.write("\n")
-        
+
 def isDefault(entry, missingDefault):
     if isinstance(entry, float):
         if entry == missingDefault:

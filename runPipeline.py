@@ -560,6 +560,7 @@ def mapBestPractices():
     job['output']['recalibrated_bam'] = dxpy.dxlink(result.get_id())
     print "Recalibrated file: " + result.get_id()
     referenceFile = dxpy.upload_local_file("ref.fa")
+    referenceFile.wait_on_close()
 
     #Spin off GATK variant caller job
     mapGatkInput = {

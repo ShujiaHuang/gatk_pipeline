@@ -84,7 +84,7 @@
     "execDepends": [{"name": "openjdk-6-jre-headless"}, {"name":"tabix"}, {"name":"pypy"}],
     "buildDepends": [{"name": "libncurses5-dev"}]
   },
-  "version": "0.0.4",
+  "version": "0.0.5",
   "categories": [
     "Variation calling"
   ],

@@ -13,7 +13,6 @@
     {"name": "separate_read_groups", "class": "boolean", "label":"Separate Read Groups", "default":true, "help":"If selected, the mappings in different mappings tables will be treated as belonging to different read groups. This should only be unchecked when reads from the same read group were separately uploaded and mapped to different mappings tables"},
     {"name": "discard_duplicates", "class": "boolean", "label":"Discard Duplicate Reads", "default":true, "help":"If selected, duplicate mappings will be discarded during the mark duplicates step"},
     {"name": "deduplicate_interchromosomal_pairs", "class": "boolean", "label":"Deduplicate Interchromosomal Pairs", "default":false, "help":"If selected, the app will run additional jobs to handle deduplication of reads whose mates are mapped interchromosomally. WARNING: This option increases the run time and cost substantially"},
-    {"name": "call_multiple_samples", "class": "boolean", "label":"Multiple Sample Mode", "default": true, "help":"If selected, multiple mappings inputs will not be combined and will instead be separately recalibrated and will be used in multiple sample variant calling"},
 
     {"name": "max_interval_size", "class":"int", "label": "Max Interval Size", "default":500, "help": "Intervals larger than this will not be used in indel realignment"},
     {"name": "min_reads_locus", "class":"int", "label": "Min Reads at Locus", "default":4, "help": "Mimimum reads at a locus to enable using entropy calculation for indel realignment"},
@@ -84,7 +83,7 @@
     "execDepends": [{"name": "openjdk-6-jre-headless"}, {"name":"tabix"}, {"name":"pypy"}],
     "buildDepends": [{"name": "libncurses5-dev"}]
   },
-  "version": "0.0.5",
+  "version": "0.0.6",
   "categories": [
     "Variation calling"
   ],

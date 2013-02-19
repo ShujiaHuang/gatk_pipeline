@@ -36,10 +36,8 @@ import time
 import logging
 import codecs
 
-sys.path.append('/usr/local/lib/')
 logging.basicConfig(level=logging.DEBUG)
 import magic
-
 
 #Example: dx_vcfToSimplevar --table_id gtable-9yZvF200000PYKJyV4k00005 --vcf_file variants.vcf --extract_header
 

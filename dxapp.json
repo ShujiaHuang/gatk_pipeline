@@ -9,11 +9,16 @@
     {"name": "output_name", "class": "string", "label":"Output Name", "help":"The name given to the objects output by this app (optional; if not provided, they will be called after the input Mappings object)", "optional": true},
     {"name": "dbsnp", "class": "file", "label":"dbSNP", "help":"The dbSNP database in vcf.gz format (indexed using bgzip). For the b37 and hg19 genomes, you can find a file appropriate for this input, in the \"Reference Genomes\" project, \"b37/GATK helpers\" and \"hg19/GATK helpers\" subfolders."},
     {"name": "known_indels", "class": "array:file", "label":"Known Indels", "help":"VCF files (compressed optionally) containing known indels to use in the process of realigning around the sites of known indels. For the b37 and hg19 genomes, you can find files appropriate for this input, in the \"Reference Genomes\" project, \"b37/GATK helpers\" and \"hg19/GATK helpers\" subfolders.", "optional":true},
+    {"name": "gatk_resources", "class": "array:file", "optional":true, "type": "GATK_Resource", "label": "GATK Variant Recalibration Resource", "help": "A file imported through GATK Resource Importer used to build the variant recalibration model. Available in the Public Project Reference Genomes in the GATK helper folder of each genome. If not provided, variant quality will not be recalibrated."},
+    {"name": "gatk_recalibration_model", "class": "file", "type":"GATK_Model", "optional":true, "label": "GATK Variant Recalibration Model", "help": "Broad indicates that best results for variant recalibration require a large dataset for training (around 30 exomes). A model file can be supplied which will give variant recalibrator variants from 30 exomes from the SRA. This can be found in the public project Reference Genomes in the GATK Helpers folder of each genome."},
+    
+    
     {"name": "reads_per_job", "class": "int", "label": "Reads per Job", "help": "Controls the degree of parallelism. The number of jobs created to run the program will be the total number of reads divided by this", "default": 25000000},
     {"name": "separate_read_groups", "class": "boolean", "label":"Separate Read Groups", "default":true, "help":"If selected, the mappings in different mappings tables will be treated as belonging to different read groups. This should only be unchecked when reads from the same read group were separately uploaded and mapped to different mappings tables"},
     {"name": "discard_duplicates", "class": "boolean", "label":"Discard Duplicate Reads", "default":true, "help":"If selected, duplicate mappings will be discarded during the mark duplicates step"},
     {"name": "deduplicate_interchromosomal_pairs", "class": "boolean", "label":"Deduplicate Interchromosomal Pairs", "default":false, "help":"If selected, the app will run additional jobs to handle deduplication of reads whose mates are mapped interchromosomally. WARNING: This option increases the run time and cost substantially"},
-
+    {"name": "call_multiple_samples", "class": "boolean", "label":"Multiple Sample Mode", "default": true, "help":"If selected, multiple mappings inputs will not be combined and will instead be separately recalibrated and will be used in multiple sample variant calling"},
+    
     {"name": "max_interval_size", "class":"int", "label": "Max Interval Size", "default":500, "help": "Intervals larger than this will not be used in indel realignment"},
     {"name": "min_reads_locus", "class":"int", "label": "Min Reads at Locus", "default":4, "help": "Mimimum reads at a locus to enable using entropy calculation for indel realignment"},
     {"name": "mismatch_fraction", "class":"float", "label": "Mismatch Fraction", "default":0.0, "help":"Fraction of base qualities needing to mismatch for a position to have high entropy for indel realignment target creator"},
@@ -70,20 +75,39 @@
     {"name": "nondeterministic", "class": "boolean", "label": "Nondeterministic", "help": "By using a random seed, when this is selected the results of GATK will be slightly different each run", "default": false},
     {"name": "calculate_BAQ", "class": "string", "label": "Calculate BAQ", "help": "Calculate per base quality scores, another metric which can be used for filters. Possible options are: \"OFF\", \"CALCULATE AS NECESSARY\", and \"RECALCULATE\"", "default": "OFF"},
     {"name": "BAQ_gap_open_penalty", "class": "float", "label": "BAQ Gap Open Penalty", "help": "If calculate BAQ enabled, what penalty to apply to the calculated BAQ score when a gap is opened", "default": 30.0},
-    {"name": "no_output_SLOD", "class": "boolean", "label": "Don't Output SLOD", "help": "When selected, SLOD will not be calculated ", "default": false}
+    {"name": "no_output_SLOD", "class": "boolean", "label": "Don't Output SLOD", "help": "When selected, SLOD will not be calculated ", "default": false},
 
+    {"name": "max_gaussians", "class": "int", "label": "Max Gaussians", "help": "In variant recalibrator, the maximum number of Gaussians to try during the variantional Bayes algorithm", "optional":true},
+    {"name": "max_iterations", "class": "int", "label": "Max Iterations", "help": "In variant recalibrator, the maximum number of VBEM iterations to be performed during the variational Bayes algorithm. Procedure will normally end when convergence is detected ", "optional":true},
+    {"name": "num_k_means", "class": "int", "label": "Number K Means", "help": "The number of k-means iterations to perform in order to initialize the means of the Gaussians in the Gaussian mixture model", "optional":true},
+    {"name": "std_threshold", "class": "float", "label": "Standard Deviation Threshold", "help": "In variant recalibrator, if a variant has annotations more than this many standard deviations from the mean, do not use it for the mixture model.", "optional":true},
+    {"name": "qual_threshold", "class": "float", "label": "Quality Threshold", "help": "In variant recalibrator, do not use variants with below this level of quality", "optional":true},
+
+    {"name": "shrinkage", "class": "float", "label": "Shrinkage", "help": "In variant recalibrator, the shrinkage parameter used in the variational Bayes algorithm", "optional":true},
+    {"name": "dirichlet", "class": "float", "label": "Dirchlet", "help": "In variant recalibrator, the dirchilet parameter used in the variantional Bayes algorithm", "optional":true},
+    {"name": "prior_counts", "class": "int", "label": "Prior Counts", "help": "In variant recalibrator, the number of prior counts to use in the variantional Bayes algorithm", "optional":true},
+    {"name": "fraction_bad", "class": "float", "label": "Fraction Bad Variants", "help": "In variant recalibrator, what percentage of the worst scoring variants to use when building the model of bad variants. e.g. 0.07 means bottom 7 percent.", "optional":true},
+    {"name": "min_num_bad_variants", "class": "int", "label": "Min Number Bad Variants", "help": "In variant recalibrator, the minimum amount of worst scoring variants to use when building the model of bad variants. Will override the Fraction Bad if necessary", "optional":true},
+    {"name": "ti_tv_target", "class": "float", "label": "Ti-Tv Target", "help": "In variant recalibrator, the expected novel Ti/Tv ratio ratio. Only used for plotting purposes", "optional":true},
+    {"name": "ignore_filter", "class": "array:string", "label": "Ignore Filters", "help": "In variant recalibrator, ignore the following filters", "optional":true},
+    {"name": "ts_filter_level", "class": "int", "label": "TS Filter Level", "help": "In variant recalibrator, the sensitivity level to start filtering at;.", "optional":true, "default":95},
+    {"name": "trust_all_polymorphic", "class":"boolean", "label":"Trust All Polymorphic Sites", "help": "In variant recalibrator, trust that all the input traning sets' unfiltered records contain only polymorphic sites to drastically speed up computation"},
+    {"name": "use_default_annotations", "class":"boolean", "label":"Use Default Annotations", "help": "Use the default list of annotations for variant recalibration", "default":true},
+    {"name": "variant_recalibrator_annotations", "class":"array:string", "label":"Variant Recalibrator Annotations", "help":"A list of info tag annotations to use for variant recalibration. This is only applied if use_default_annotations is set to false", "optional":true}    
   ],
   "outputSpec": [
     {"name": "recalibrated_mappings", "class": "gtable", "type": {"$and": ["LetterMappings", "Mappings", "gri"]}, "label": "Mappings", "help": "The deduplicated and recalibrated Mappings table object."},
-    {"name": "variants", "class": "gtable", "type": {"$and": ["Variants", "gri"]}, "label": "Variants", "help": "The Variants table object containing the called variants."}
+    {"name": "variants", "class": "gtable", "type": {"$and": ["Variants", "gri"]}, "label": "Variants", "help": "The Variants table object containing the called variants."},
+    {"name": "recalibrated_variants", "class": "gtable", "type": {"$and": ["Variants", "gri"]}, "optional": true, "label": " Recalibrated Variants", "help": "The Variants table object containing the called variants."}
   ],
   "runSpec": {
     "file": "runPipeline.py",
     "interpreter": "python2.7_old",
     "execDepends": [{"name": "openjdk-6-jre-headless"}, {"name":"tabix"}, {"name":"pypy"}],
-    "buildDepends": [{"name": "libncurses5-dev"}]
+    "buildDepends": [{"name": "libncurses5-dev"}],
+    "systemRequirements":{"recalibrateVariants":{"instanceType":"dx_m1.xlarge"}}
   },
-  "version": "0.0.6",
+  "version": "0.0.7",
   "categories": [
     "Variation calling"
   ],
@@ -136,7 +160,18 @@
       "downsample_to_fraction",
       "nondeterministic",
       "mismatch_fraction",
-      "max_position_move"
+      "max_position_move",
+      "shrinkage",
+      "dirchlet",
+      "prior_counts",
+      "fraction_bad",
+      "min_num_bad_variants",
+      "ti_tv_target",
+      "ignore_filter",
+      "ts_filter_level",
+      "trust_all_polymorphic",
+      "use_default_annotations",
+      "variant_recalibrator_annotations"      
     ],
     "upstreamAuthor": "Broad Institute",
     "upstreamVersion": "1.5-21-g979a84a",

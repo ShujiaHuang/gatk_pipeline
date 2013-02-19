@@ -55,7 +55,7 @@ parser.add_argument("--read_group_platform", dest="read_group_platform", default
 parser.add_argument("--write_row_id", dest="write_row_id", default=False, action="store_true", help="If selected, the row of the mappings table will be written into optional sam tag ZD")
 parser.add_argument("--include_unmapped", dest="include_unmapped", default=False, action="store_true", help="If selected, unmapped reads will specifically be included")
 parser.add_argument("--only_unmapped", dest="only_unmapped", default=False, action="store_true", help="If selected, Only unmapped reads will be written")
-
+parser.add_argument("--sample", dest="sample", default='Sample_0', help="What sample to use for the SAM header")
 
 def main(**kwargs):
 
@@ -111,7 +111,7 @@ def main(**kwargs):
         header += "@SQ\tSN:"+str(contigNames[i])+"\tLN:"+str(contigSizes[i])+"\n"
 
     for i in range(len(mappingsTable.get_details()['read_groups'])):
-        header += "@RG\tID:"+str(i+addToReadGroup) + "\tSM:Sample_0"
+        header += "@RG\tID:"+str(i+addToReadGroup) + "\tSM:" + opts.sample
         if opts.read_group_platform != '':
             header += "\tPL:"+opts.read_group_platform
         header += "\n"

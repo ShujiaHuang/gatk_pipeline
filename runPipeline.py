@@ -57,94 +57,213 @@ def main():
     except:
         raise dxpy.AppError("The original reference genome must be attached as a detail")
 
-    reads = 0
+    samples = []
     for x in job['input']['mappings']:
-        table = dxpy.DXGTable(x)
-        reads += int(table.describe()['length'])
-    chunks = int(reads/job['input']['reads_per_job'])+1
-
+        samples.append(dxpy.DXGTable(x).describe()['name'].replace(" ", "_"))
+    if job['input']['call_multiple_samples']:
+        samples = dxpy.DXGTable(job['input']['mappings'][0]).describe()['name'].replace(" ", "_")
+        
     gatkCommand = buildCommand(job)
-    variantsTable = buildVariantsTable(job, mappingsTable)
+
+    subprocess.check_call("dx-contigset-to-fasta %s ref.fa" % (job['input']['reference']['$dnanexus_link']), shell=True)
+    referenceFile = dxpy.upload_local_file("ref.fa")
 
 
     reduceInput = {}
+    bestPracticesJobs = []
+    variantCallingCoordinatorInput = job['input']
+    variantCallingCoordinatorInput["recalibrated_bam"] = []
+    variantCallingCoordinatorInput["mappings_tables"] = []
+    variantCallingCoordinatorInput["reference_file"] = referenceFile.get_id()
+    mappingsImportCoordinatorInput = {"recalibrated_bam":[], 'recalibrated_table_id': recalibratedTable.get_id()}
+
+    for x in job['input']['mappings']:
+        reads = int(dxpy.DXGTable(x).describe()['length'])
+        chunks = int(reads/job['input']['reads_per_job'])+1
+        
+        print "splits: " + str(chunks)
+
+        #Split the genome into chunks to parallelize
+        commandList = splitGenomeLengthChromosome(originalContigSet, chunks)
+        chunks = len(commandList)
+        excludeInterchromosome = (chunks > 1)
+    
+
+        #This is a Picard Mark Duplicates job run only on interchromosomal mappings in the case that the genome is split into regions
+        #This is necessary because Mark Duplicates has to look at both mates in a read pair, so interchromosomal mappings must go together
+        reduceInterchromosomeInput = {}
+        bamFiles = []
+        if chunks > 1 and job['input']['deduplicate_interchromosomal_pairs']:
+            for i in xrange(-1, chunks):
+                bamFiles.append(dxpy.new_dxfile().get_id())
+                mapInterchromosomeInput = {
+                'mappings_tables': mappingsTable.get_id(),
+                'interval': commandList[i],
+                'job_number' : i,
+                'call_multiple_samples': job['input']['call_multiple_samples'],
+                'separate_read_groups' : job['input']['separate_read_groups']
+                }
+                interchromosomeJobId = dxpy.new_dxjob(fn_input=mapInterchromosomeInput, fn_name="mapInterchromosome").get_id()
+                reduceInterchromosomeInput["mapJob"+str(i)] = {'job': interchromosomeJobId, 'field': 'file_id'}
+            #interchromosomeJobField = { 'job': interchromosomeJobId, 'field': 'bam'}
+    
+            #Make a reduce job for the interchromosome component
+            reduceInterchromosomeInput["file_list"] =  bamFiles
+            reduceInterchromosomeInput["interval"] = commandList
+            reduceInterchromosomeInput["discard_duplicates"] = job['input']['discard_duplicates']
+            reduceJobId = dxpy.new_dxjob(fn_input=reduceInterchromosomeInput, fn_name="reduceInterchromosome").get_id()
+            deduplicateInterchromosome = True
+        else:
+            interchromosomeJobField = ''
+            deduplicateInterchromosome = False
+    
+        #This runs the Picard Mark Duplicates program to deduplicate the reads
+
+        for i in range(len(commandList)):
+            mapBestPracticesInput = {
+                'mappings_tables': mappingsTable.get_id(),
+                'recalibrated_table_id': recalibratedTable.get_id(),
+                'file_list': bamFiles,
+                'interval': commandList[i],
+                'job_number' : i,
+                'reference_file': referenceFile.get_id(),
+                'dbsnp': job['input']['dbsnp'],
+                'separate_read_groups' : job['input']['separate_read_groups'],
+                'call_multiple_samples': job['input']['call_multiple_samples'],
+                'discard_duplicates': job['input']['discard_duplicates'],
+                'parent_input': job['input'],
+                'deduplicate_interchromosome': deduplicateInterchromosome,
+                'gatk_command': gatkCommand,
+                'compress_reference': job['input']['compress_reference'],
+                'infer_no_call': job['input']['infer_no_call'],
+                'compress_no_call': job['input']['compress_no_call'],
+            }
+            if 'known_indels' in job['input']:
+                mapBestPracticesInput['known_indels'] = job['input']['known_indels']
+    
+            mapJobId = dxpy.new_dxjob(fn_input=mapBestPracticesInput, fn_name="mapBestPractices").get_id()
+            reduceInput["mapJob" + str(i)] = {'job': mapJobId, 'field': 'ok'}
+            bestPracticesJobs.append(mapJobId)
+            variantCallingCoordinatorInput["mappings_tables"].append(mappingsTable.get_id())
+    for mapJobId in bestPracticesJobs:
+        variantCallingCoordinatorInput["recalibrated_bam"].append({"job":mapJobId, "field": "recalibrated_bam"})
+        mappingsImportCoordinatorInput["recalibrated_bam"].append({"job":mapJobId, "field": "recalibrated_bam"})
+    variantCallingCoordinatorJob = dxpy.new_dxjob(fn_input=variantCallingCoordinatorInput, fn_name="variantCallingCoordinator").get_id()
+    mappingsImportCoordinatorJob = dxpy.new_dxjob(fn_input=mappingsImportCoordinatorInput, fn_name="mappingsImportCoordinator").get_id()
+    
+    reduceInput["variants_table"] = {'job': variantCallingCoordinatorJob, 'field': 'variants_table'}
+    reduceInput["gatk_completion"] = {'job': variantCallingCoordinatorJob, 'field': 'gatk_jobs'}
+    reduceInput["import_jobs"] = {'job': mappingsImportCoordinatorJob, 'field': 'import_jobs'}
+    reduceInput["recalibrated_table"] = recalibratedTable.get_id()
+
+    
+    if job["input"].get("gatk_resources") != None:
+        reduceInput["recalibrated_variants_table"] = {'job':variantCallingCoordinatorJob, 'field': "recalibrated_variants_table"}
+        
+    reduceJobId = dxpy.new_dxjob(fn_input=reduceInput, fn_name="reduceBestPractices").get_id()
+    job['output'] = {'recalibrated_mappings': {'job': reduceJobId, 'field': 'recalibrated_table'}, 'variants': {'job': reduceJobId, 'field': 'variants_table'}}
+    if job["input"].get("gatk_resources") != None:
+        job['output']['recalibrated_variants'] = {'job': reduceJobId, 'field': 'recalibrated_variants_table'}
+
+def mappingsImportCoordinator():
+    
+    for x in job['input']['recalibrated_bam']:
+        fileId = dxpy.DXFile(x).get_id()
+    
+        #Spin off Import Recalibrated Mappings job
+        importRecalibratedMappingsInput = {
+            'recalibrated_bam': fileId,
+            'recalibrated_table_id': job['input']['recalibrated_table_id']
+        }
+    job['output'] = {"import_jobs": []}
+    job['output']['import_jobs'].append({'job':dxpy.new_dxjob(fn_input=importRecalibratedMappingsInput, fn_name="importRecalibratedMappings").get_id(), 'field':'ok'})
+
+def variantCallingCoordinator():
+    os.environ['CLASSPATH'] = '/opt/jar/MarkDuplicates.jar:/opt/jar/SamFormatConverter.jar:/opt/jar/SortSam.jar:/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/MergeSamFiles.jar:/opt/jar/GenomeAnalysisTK.jar:/opt/jar/AddOrReplaceReadGroups.jar'
+    
+    mappingsTable = dxpy.DXGTable(job['input']['mappings'][0]['$dnanexus_link'])
+    originalContigSet = mappingsTable.get_details()['original_contigset']
+
+    # Merge BAMs
+    samples = []
+    merges = {}
+    for i in range(len(job['input']['recalibrated_bam'])):
+        if job['input']['recalibrated_bam'][i] != '':
+            name = dxpy.DXGTable(job['input']['mappings_tables'][i]).describe()['name'].replace(" ", "_")
+            if job['input']['call_multiple_samples'] == False:
+                name = "recalibrated"
+            dxpy.download_dxfile(job['input']['recalibrated_bam'][i], name+str(i)+".bam")
+            if merges.get(name) == None:
+                merges[name] = []
+            merges[name].append(name+str(i)+".bam")
+    
+    commandInput = ''
+    for k, v in merges.iteritems():
+        samples.append(k)
+        if len(v) == 1:
+            subprocess.check_call("mv %s %s.bam" % (v[0], k), shell=True)
+        else:
+            print "Merging Sam Files"
+            print k + ".bam"
+            commandInput += " -I %s.bam" % k
+            mergeSamCommand = "java -Xmx6g net.sf.picard.sam.MergeSamFiles OUTPUT=%s.bam USE_THREADING=true SORT_ORDER=coordinate VALIDATION_STRINGENCY=SILENT" % k
+            for x in v:
+                mergeSamCommand += " INPUT=" + x
+            print "Merge Command"
+            print mergeSamCommand
+            subprocess.check_call(mergeSamCommand, shell=True)
+
+        
+    variantsTable = buildVariantsTable(job, mappingsTable, samples, dxpy.DXRecord(originalContigSet).get_id(), '')
+    recalibratedVariantsTable = buildVariantsTable(job, mappingsTable, samples, dxpy.DXRecord(originalContigSet).get_id(), ' Recalibrated')
+    
+    gatkCommand = buildCommand(job)
+ 
+    reads = 0
+    for x in job['input']['mappings']:
+        mappingsTable = dxpy.DXGTable(x)
+        reads += int(mappingsTable.describe()['length'])
+    
+    chunks = int(reads/job['input']['reads_per_job'])+1    
     #Split the genome into chunks to parallelize
     commandList = splitGenomeLengthChromosome(originalContigSet, chunks)
     chunks = len(commandList)
-    excludeInterchromosome = (chunks > 1)
-    markDuplicatesJobs = []
-
-    #This is a Picard Mark Duplicates job run only on interchromosomal mappings in the case that the genome is split into regions
-    #This is necessary because Mark Duplicates has to look at both mates in a read pair, so interchromosomal mappings must go together
-    reduceInterchromosomeInput = {}
-    bamFiles = []
-    if chunks > 1 and job['input']['deduplicate_interchromosomal_pairs']:
-        for i in xrange(-1, chunks):
-            bamFiles.append(dxpy.new_dxfile().get_id())
-            mapInterchromosomeInput = {
-            'mappings_tables': job['input']['mappings'],
-            'interval': commandList[i],
-            'job_number' : i,
-            'separate_read_groups' : job['input']['separate_read_groups']
-            }
-            interchromosomeJobId = dxpy.new_dxjob(fn_input=mapInterchromosomeInput, fn_name="mapInterchromosome").get_id()
-            reduceInterchromosomeInput["mapJob"+str(i)] = {'job': interchromosomeJobId, 'field': 'file_id'}
-        #interchromosomeJobField = { 'job': interchromosomeJobId, 'field': 'bam'}
-
-        #Make a reduce job for the interchromosome component
-        reduceInterchromosomeInput["file_list"] =  bamFiles
-        reduceInterchromosomeInput["interval"] = commandList
-        reduceInterchromosomeInput["discard_duplicates"] = job['input']['discard_duplicates']
-        reduceJobId = dxpy.new_dxjob(fn_input=reduceInterchromosomeInput, fn_name="reduceInterchromosome").get_id()
-        deduplicateInterchromosome = True
-    else:
-        interchromosomeJobField = ''
-        deduplicateInterchromosome = False
-
-    #This runs the Picard Mark Duplicates program to deduplicate the reads
-    reduceInput = {}
-    variantCallingCoordinatorInput = {}
+    
+    gatkJobs = []
     for i in range(len(commandList)):
-        mapBestPracticesInput = {
-            'mappings_tables': job['input']['mappings'],
-            'recalibrated_table_id': recalibratedTable.get_id(),
-            'file_list': bamFiles,
+        inputFiles = []
+        for j in range(len(samples)):
+            
+            inputFiles.append(dxpy.upload_local_file("%s.bam" % samples[j]).get_id())
+            
+        mapGatkInput = {
+            'mappings_files': inputFiles,
+            'reference_file': job['input']['reference_file'],
             'interval': commandList[i],
-            'job_number' : i,
-            'reference': job['input']['reference']['$dnanexus_link'],
-            'dbsnp': job['input']['dbsnp'],
-            'separate_read_groups' : job['input']['separate_read_groups'],
-            'discard_duplicates': job['input']['discard_duplicates'],
-            'parent_input': job['input'],
-            'deduplicate_interchromosome': deduplicateInterchromosome,
-            'gatk_command': gatkCommand,
+            'tableId': variantsTable.get_id(),
+            'command': gatkCommand,
             'compress_reference': job['input']['compress_reference'],
             'infer_no_call': job['input']['infer_no_call'],
             'compress_no_call': job['input']['compress_no_call'],
-            'variants_table': variantsTable.get_id()
+            'part_number': i
         }
-        if 'known_indels' in job['input']:
-            mapBestPracticesInput['known_indels'] = job['input']['known_indels']
-
-
-        mapJobId = dxpy.new_dxjob(fn_input=mapBestPracticesInput, fn_name="mapBestPractices").get_id()
-        variantCallingCoordinatorInput['best_practices_job'+str(i)] = {'job': mapJobId, 'field': 'gatk_job'}
-        reduceInput["mapJob" + str(i)] = {'job': mapJobId, 'field': 'ok'}
-    variantCallingCoordinatorJob = dxpy.new_dxjob(fn_input=variantCallingCoordinatorInput, fn_name="variantCallingCoordinator").get_id()
-    reduceInput["recalibrated_table"] = recalibratedTable.get_id()
-    reduceInput["variants_table"] = variantsTable.get_id()
-    reduceInput["gatk_completion"] = {'job': variantCallingCoordinatorJob, 'field': 'gatk_jobs'}
-
-
-    reduceJobId = dxpy.new_dxjob(fn_input=reduceInput, fn_name="reduceBestPractices").get_id()
-    job['output'] = {'recalibrated_mappings': {'job': reduceJobId, 'field': 'recalibrated_table'}, 'variants': {'job': reduceJobId, 'field': 'variants_table'}}
-
-def variantCallingCoordinator():
+        # Run a "map" job for each chunk
+        gatkJobs.append(dxpy.new_dxjob(fn_input=mapGatkInput, fn_name="mapGatk").get_id())
+            
+    if job['input'].get('gatk_resources') != None:
+        variantRecalibrationInput = job["input"]
+        variantRecalibrationInput["vcfs"] = []
+        variantRecalibrationInput["recalibrated_variants_table"] = recalibratedVariantsTable.get_id()
+        for x in gatkJobs:
+            variantRecalibrationInput["vcfs"].append({"job":x, "field":"file_id"})
+        job['output']['variant_recalibration_job'] = {'job': dxpy.new_dxjob(fn_input=variantRecalibrationInput, fn_name="recalibrateVariants").get_id(), 'field':'ok'}
+        job['output']['recalibrated_variants_table'] = recalibratedVariantsTable.get_id()
+        
     job['output']['gatk_jobs'] = []
-    for i in range(len(job['input'])):
-        job['output']['gatk_jobs'].append({'job': job['input']['best_practices_job'+str(i)], 'field': 'ok'})
-
-
+    for x in gatkJobs:
+        job['output']['gatk_jobs'].append({'job':x, 'field':'ok'})
+    job['output']['variants_table'] = variantsTable.get_id()
+    
 def reduceBestPractices():
     startTime = time.time()
     recalibratedTable = dxpy.DXGTable(job['input']['recalibrated_table'])
@@ -152,6 +271,12 @@ def reduceBestPractices():
     print "Table closing completed in " + str(int((time.time()-startTime)/60)) + " minutes"
     variantsTable = dxpy.DXGTable(job['input']['variants_table'])
     variantsTable.close()
+    
+    if job["input"].get("recalibrated_variants_table") != None and job["input"].get("recalibrated_variants_table") != '':
+        recalibratedVariantsTable = dxpy.DXGTable(job["input"]["recalibrated_variants_table"])
+        recalibratedVariantsTable.close()
+        job['output']['recalibrated_variants_table'] = dxpy.dxlink(recalibratedVariantsTable.get_id())
+    
     job['output']['recalibrated_table'] = dxpy.dxlink(recalibratedTable.get_id())
     job['output']['variants_table'] = dxpy.dxlink(variantsTable.get_id())
 
@@ -168,7 +293,7 @@ def writeUnmappedReads(mappingsTable, dedupTable):
             dedupTable.add_rows([entry])
 
 
-def buildVariantsTable(job, mappingsTable):
+def buildVariantsTable(job, mappingsTable, samples, reference_id, appendToName):
     if job['input']['output_mode'] == "EMIT_VARIANTS_ONLY":
         job['input']['infer_no_call'] = False
 
@@ -187,9 +312,6 @@ def buildVariantsTable(job, mappingsTable):
     description = {}
     samples = []
 
-    print headerInfo
-    print headerInfo['tags']['format']
-
     indices = [dxpy.DXGTable.genomic_range_index("chr","lo","hi", 'gri')]
 
     formats = {}
@@ -200,9 +322,8 @@ def buildVariantsTable(job, mappingsTable):
         variants_schema.append({"name": "info_"+k, "type":translateTagTypeToColumnType(v)})
         description[k] = {'name' : k, 'description' : v['description'], 'type' : v['type'], 'number' : v['number']}
 
-    numSamples = 1
     #For each sample, write the sample-specific columns
-    for i in range(numSamples):
+    for i in range(len(samples)):
       variants_schema.extend([
         {"name": "genotype_"+str(i), "type": "string"},
         {"name": "phasing_"+str(i), "type": "string"},
@@ -212,7 +333,6 @@ def buildVariantsTable(job, mappingsTable):
         {"name": "coverage_"+str(i), "type": "string"},
         {"name": "total_coverage_"+str(i), "type": "int32"}
       ])
-      samples.append("Sample_0")
       for k, v in headerInfo['tags']['format'].iteritems():
         if "format_"+k not in elevatedTags:
           variants_schema.append({"name": "format_"+k+"_"+str(i), "type":translateTagTypeToColumnType(v)})
@@ -222,64 +342,53 @@ def buildVariantsTable(job, mappingsTable):
     variantsTable = dxpy.open_dxgtable(tableId)
     variantsTable.add_types(["Variants", "gri"])
 
-    details = {'samples':samples, 'original_contigset':job['input']['reference'], 'original_mappings':job['input']['mappings'], 'formats':headerInfo['tags']['format'], 'infos':headerInfo['tags']['info']}
+    details = {'samples':samples, 'original_contigset':reference_id, 'formats':headerInfo['tags']['format'], 'infos':headerInfo['tags']['info']}
     #if headerInfo.get('filters') != {}:
     #  details['filters'] = headerInfo['filters']
     variantsTable.set_details(details)
 
     if 'output_name' in job['input']:
-        variantsTable.rename(job['input']['output_name'])
+        variantsTable.rename(job['input']['output_name'] + appendToName)
     elif (job['input']['genotype_likelihood_model'] == "SNP"):
-        variantsTable.rename(mappingsTable.describe()['name'] + " SNP calls by GATK")
+        variantsTable.rename(mappingsTable.describe()['name'] + " SNP calls by GATK" + appendToName)
     elif (job['input']['genotype_likelihood_model'] == "INDEL"):
-        variantsTable.rename(mappingsTable.describe()['name'] + " indel calls by GATK")
+        variantsTable.rename(mappingsTable.describe()['name'] + " indel calls by GATK" + appendToName)
     elif (job['input']['genotype_likelihood_model'] == "BOTH"):
-        variantsTable.rename(mappingsTable.describe()['name'] + " SNP and indel calls by GATK")
+        variantsTable.rename(mappingsTable.describe()['name'] + " SNP and indel calls by GATK" + appendToName)
     else:
-        variantsTable.rename(mappingsTable.describe()['name'] + " variant calls by GATK")
+        variantsTable.rename(mappingsTable.describe()['name'] + " variant calls by GATK" + appendToName)
 
     return variantsTable
 
 def mapInterchromosome():
     os.environ['CLASSPATH'] = '/opt/jar/MarkDuplicates.jar:/opt/jar/SamFormatConverter.jar:/opt/jar/SortSam.jar:/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/MergeSamFiles.jar:/opt/jar/GenomeAnalysisTK.jar:/opt/jar/AddOrReplaceReadGroups.jar'
 
+    mappingsTable = job['input']['mappings_tables']
+
     regionFile = open("regions.txt", 'w')
     regionFile.write(job['input']['interval'])
     regionFile.close()
-
+    
+    sampleName = "Sample_0"
+    if job['input']['call_multiple_samples']:
+        sampleName = dxpoy.DXGTable(mappingsTable).describe()['name'].replace(" ", "_")
+    
     jobNumber = job['input']['job_number']
     if jobNumber == -1:
-        for i in range(len(job['input']['mappings_tables'])):
-            mappingsTable = dxpy.DXGTable(job['input']['mappings_tables'][i]['$dnanexus_link']).get_id()
-            command = "pypy /usr/bin/dx_mappings_to_sam2 %s --output input.%d.sam --id_as_name --only_unmapped --read_group_platform illumina --id_prepend %d_" % (mappingsTable, i, i)
-            print command
-            subprocess.check_call(command, shell=True)
-    else:
-        for i in range(len(job['input']['mappings_tables'])):
-            mappingsTable = dxpy.DXGTable(job['input']['mappings_tables'][i]['$dnanexus_link']).get_id()
-            command = "pypy /usr/bin/dx_mappings_to_sam2 %s --output input.%d.sam --id_as_name --region_index_offset -1 --region_file regions.txt --read_group_platform illumina --only_interchromosomal_mate --id_prepend %d_" % (mappingsTable, i, i)
-            print command
-            subprocess.check_call(command, shell=True)
-
-
-    readsPresent = False
-    if len(job['input']['mappings_tables']) == 1:
-        if checkSamContainsRead("input.0.sam"):
-            readsPresent = True
-            subprocess.check_call("mv input.0.sam output.sam", shell=True)
-    else:
-        command = "java -Xmx4g net.sf.picard.sam.MergeSamFiles OUTPUT=output.sam USE_THREADING=true SORT_ORDER=coordinate VALIDATION_STRINGENCY=SILENT"
-        for i in range(len(job['input']['mappings_tables'])):
-            if checkSamContainsRead("input."+str(i)+".sam"):
-                command += " INPUT=input."+str(i)+".sam"
-                readsPresent = True
+        command = "pypy /usr/bin/dx_mappings_to_sam2 %s --output input.sam --id_as_name --only_unmapped --read_group_platform illumina --sample %s" % (mappingsTable)
+        print command
         subprocess.check_call(command, shell=True)
-    if readsPresent:
-        subprocess.check_call("samtools view -bS output.sam > output.bam", shell=True)
-        fileId = dxpy.upload_local_file("output.bam").get_id()
-        job['output']['file_id'] = fileId
     else:
-        job['output']['file_id'] = ''
+        command = "pypy /usr/bin/dx_mappings_to_sam2 %s --output input.sam --id_as_name --region_index_offset -1 --region_file regions.txt --read_group_platform illumina --only_interchromosomal_mate --sample %s" % (mappingsTable.get_id())
+        print command
+        subprocess.check_call(command, shell=True)
+
+    if checkSamContainsRead("input.sam"):
+        subprocess.check_call("samtools view -bS output.sam > output.bam", shell=True)
+    else:
+        subprocess.check_call("samtools view -HbS output.sam > output.bam", shell=True)
+    fileId = dxpy.upload_local_file("output.bam").get_id()
+    job['output']['file_id'] = ''
 
 def reduceInterchromosome():
     os.environ['CLASSPATH'] = '/opt/jar/MarkDuplicates.jar:/opt/jar/SamFormatConverter.jar:/opt/jar/SortSam.jar:/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/MergeSamFiles.jar:/opt/jar/GenomeAnalysisTK.jar:/opt/jar/AddOrReplaceReadGroups.jar'
@@ -323,6 +432,159 @@ def reduceInterchromosome():
     job['output']['ok'] = True
     return
 
+def importRecalibratedMappings():
+    recalibratedTable = dxpy.DXGTable(job['input']['recalibrated_table_id'])
+    
+    dxpy.DXFile(job['input']['recalibrated_bam']).wait_on_close()
+    
+    dxpy.download_dxfile(job['input']['recalibrated_bam'], "recalibrated.bam")
+    subprocess.check_call("samtools view -h -o recalibrated.sam recalibrated.bam", shell=True)
+
+    default = {}
+    recalibratedColNames = recalibratedTable.get_col_names()
+    recalibratedCol = {}
+    for i in range(len(recalibratedColNames)):
+        recalibratedCol[recalibratedColNames[i]] = i
+
+    for x in recalibratedTable.describe()['columns']:
+        if "int" in x["type"]:
+            default[x["name"]] = sys.maxint
+        elif x["type"] == "float":
+            default[x["name"]] = float(sys.maxint)
+        elif x["type"] == "boolean":
+            default[x["name"]] = False
+        else:
+            default[x["name"]] = ""
+
+    print "Writing mate pair information for lookup"
+    startTime = time.time()
+    if recalibratedCol.get("chr2") != None:
+        mateLocations = {}
+        for line in open("recalibrated.sam", 'r'):
+            if line[0] != "@":
+                tabSplit = line.split("\t")
+                if len(tabSplit) > 9:
+                    chr = tabSplit[2]
+                    lo = int(tabSplit[3])-1
+                    templateId = int(tabSplit[0])
+                    cigar = re.split('(\d+)', tabSplit[5])
+                    alignLength = 0
+                    for p in range(len(cigar)):
+                        c = cigar[p]
+                        if c == 'M' or c == 'D' or c == 'N' or c == 'X' or c == 'P' or c == '=':
+                            alignLength += int(cigar[p-1])
+                    hi = lo + alignLength
+    
+                    recalibrationTags = re.findall("zd:Z:([^\t]*)[\t\n]", line)[0].split("##&##")
+                    reportedLo = int(recalibrationTags[1])
+                    reportedHi = int(recalibrationTags[2])
+                    if lo != reportedLo or hi != reportedHi:
+                        if int(tabSplit[1]) & 0x1 & 0x40:
+                            mateLocations[templateId] = {0: {"lo":lo, "hi":hi, "chr":chr}}
+                        elif int(tabSplit[1]) & 0x1 & 0x80:
+                            mateLocations[templateId] = {1: {"lo":lo, "hi":hi, "chr":chr}}
+        print str(len(mateLocations)) + " Interchromosomal reads changed lo or hi"
+    print "Interchromosome changes to lo and hi recorded in " + str(int((time.time()-startTime)/60)) + " minutes"
+
+    complement_table = string.maketrans("ATGCatgc", "TACGtacg")
+    rowsWritten = 0
+
+    startTime = time.time()
+    for line in open("recalibrated.sam", 'r'):
+        if line[0] != "@":
+            tabSplit = line.split("\t")
+            if len(tabSplit) > 9:
+                templateId = int(tabSplit[0])
+                flag = int(tabSplit[1])
+                chr = tabSplit[2]
+                lo = int(tabSplit[3])-1
+                qual = tabSplit[10]
+                alignLength = 0
+                mapq = int(tabSplit[4])
+                cigar = re.split('(\d+)', tabSplit[5])
+                duplicate = (flag & 0x400 == True)
+                sequence = tabSplit[9]
+                recalibrationTags = re.findall("zd:Z:([^\t]*)[\t\n]", line)[0].split("##&##")
+    
+                name = recalibrationTags[0]
+                readGroup = int(re.findall("RG:Z:(\d+)", line)[0])
+    
+                if flag & 0x4:
+                    status = "UNMAPPED"
+                elif flag & 0x100:
+                    status = "SECONDARY"
+                else:
+                    status = "PRIMARY"
+                if flag & 0x200:
+                    qcFail = True
+                else:
+                    qcFail = False
+                if flag & 0x10 == 0 or status == "UNMAPPED":
+                    negativeStrand = False
+                else:
+                    negativeStrand = True
+                    sequence = sequence.translate(complement_table)[::-1]
+                    qual = qual[::-1]
+    
+                for p in range(len(cigar)):
+                    c = cigar[p]
+                    if c == 'M' or c == 'D' or c == 'N' or c == 'X' or c == 'P' or c == '=':
+                        alignLength += int(cigar[p-1])
+                cigar = tabSplit[5]
+                hi = lo + alignLength
+    
+                if recalibratedCol.get("chr2") != None:
+                    properPair=False
+                    if (flag & 0x1) and (flag & 0x2):
+                        properPair = True
+    
+                    reportedChr2 = recalibrationTags[3]
+                    reportedLo2 = int(recalibrationTags[4])
+                    reportedHi2 = int(recalibrationTags[5])
+                    status2 = recalibrationTags[6]
+    
+                    if not flag & 0x1:
+                        negativeStrand2 = False
+                    elif flag & 0x20 and status2 != "UNMAPPED":
+                        negativeStrand2 = True
+                    else:
+                        negativeStrand2 = False
+    
+                    if flag & 0x1:
+                        if flag & 0x40:
+                            mateId = 0
+                        elif flag & 0x80:
+                            mateId = 1
+                    else:
+                        mateId = -1
+    
+                    try:
+                        if mateId == 1:
+                            chr2 = mateLocations[tabSplit[0]][0]["chr2"]
+                            lo2 = mateLocations[tabSplit[0]][0]["lo"]
+                            hi2 = mateLocations[tabSplit[0]][0]["hi"]
+                        elif mateId == 0:
+                            chr2 = mateLocations[tabSplit[0]][1]["chr2"]
+                            lo2 = mateLocations[tabSplit[0]][1]["lo"]
+                            hi2 = mateLocations[tabSplit[0]][1]["hi"]
+                        else:
+                            chr2 = reportedChr2
+                            lo2 = reportedLo2
+                            hi2 = reportedHi2
+                    except:
+                        chr2 = reportedChr2
+                        lo2 = reportedLo2
+                        hi2 = reportedHi2
+                    recalibratedTable.add_rows([[sequence, name, qual, status, chr, lo, hi, negativeStrand, mapq, qcFail, duplicate, cigar, templateId, readGroup, mateId, status2, chr2, lo2, hi2, negativeStrand2, properPair]])
+                else:
+                    recalibratedTable.add_rows([[sequence, name, qual, status, chr, lo, hi, negativeStrand, mapq, qcFail, duplicate, cigar, templateId, readGroup]])
+                rowsWritten += 1
+                if rowsWritten%100000 == 0:
+                    print "Imported " + str(rowsWritten) + " rows. Time taken: " + str(int((time.time()-startTime)/60)) + " minutes"
+                    recalibratedTable.flush()
+    recalibratedTable.flush()
+    job['output']['ok'] = True
+
 def mapBestPractices():
     os.environ['CLASSPATH'] = '/opt/jar/MarkDuplicates.jar:/opt/jar/SamFormatConverter.jar:/opt/jar/SortSam.jar:/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/MergeSamFiles.jar:/opt/jar/GenomeAnalysisTK.jar:/opt/jar/AddOrReplaceReadGroups.jar'
 
@@ -335,40 +597,33 @@ def mapBestPractices():
 
     readGroups = 0
     print "Converting Table to SAM"
-    for i in range(len(job['input']['mappings_tables'])):
-        mappingsTable = dxpy.DXGTable(job['input']['mappings_tables'][i]['$dnanexus_link']).get_id()
-        command = "pypy /usr/bin/dx_mappings_to_sam2 %s --output input.%d.sam --region_index_offset -1 --id_as_name --region_file regions.txt --write_row_id --read_group_platform illumina --id_prepend %d_" % (mappingsTable, i, i)
-        if job['input']['deduplicate_interchromosome']:
-            command += " --no_interchromosomal_mate"
-        if job['input']['separate_read_groups']:
-            command += " --add_to_read_group " + str(readGroups)
-            readGroups += len(dxpy.DXGTable(job['input']['mappings_tables'][i]['$dnanexus_link']).get_details()['read_groups'])
-        print command
-        startTime = time.time()
-        subprocess.check_call(command, shell=True)
-        print "Download mappings completed in " + str(int((time.time()-startTime)/60)) + " minutes"
+    mappingsTable = job['input']['mappings_tables']
+    
+    sampleName = "recalibrated"
+    if job['input']['call_multiple_samples']:
+        sampleName = dxpy.DXGTable(mappingsTable).describe()['name'].replace(" ", "_")
+    
+    command = "pypy /usr/bin/dx_mappings_to_sam2 %s --output input.sam --region_index_offset -1 --id_as_name --region_file regions.txt --write_row_id --read_group_platform illumina --sample %s" % (mappingsTable, sampleName)
+    if job['input']['deduplicate_interchromosome']:
+        command += " --no_interchromosomal_mate"
+    print command
+    startTime = time.time()
+    subprocess.check_call(command, shell=True)
+    print "Download mappings completed in " + str(int((time.time()-startTime)/60)) + " minutes"
 
     readsPresent = False
 
-    if len(job['input']['mappings_tables']) == 1:
-        if checkSamContainsRead("input.0.sam"):
-            readsPresent = True
-            subprocess.check_call("mv input.0.sam input.sam", shell=True)
-    else:
-        command = "java -Xmx4g net.sf.picard.sam.MergeSamFiles OUTPUT=input.sam USE_THREADING=true SORT_ORDER=coordinate VALIDATION_STRINGENCY=SILENT"
-        for i in range(len(job['input']['mappings_tables'])):
-            if checkSamContainsRead("input."+str(i)+".sam"):
-                command += " INPUT=input."+str(i)+".sam"
-                readsPresent = True
-
-    if readsPresent:
+    if checkSamContainsRead("input.sam"):
         subprocess.check_call(command, shell=True)
         subprocess.check_call("java -Xmx4g net.sf.picard.sam.MarkDuplicates I=input.sam O=dedup.sam METRICS_FILE=metrics.txt ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT REMOVE_DUPLICATES=%s" % job["input"]["discard_duplicates"], shell=True)
         startTime = time.time()
         subprocess.check_call("samtools view -bS dedup.sam > dedup.bam", shell=True)
         print "Conversion to BAM completed in " + str(int((time.time()-startTime)/60)) + " minutes"
     else:
-        job['output']['gatk_job'] = True
+        subprocess.check_call("samtools view -HbS dedup.sam > recalibrated.bam", shell=True)
+        result = dxpy.upload_local_file("recalibrated.bam")
+        job['output']['recalibrated_bam'] = result.get_id()
+        job['output']['import_job'] = ''
         job['output']['ok'] = True
         return
 
@@ -403,9 +658,8 @@ def mapBestPractices():
     subprocess.check_call("samtools index input.bam", shell=True)
     print "Index BAM completed in " + str(int((time.time()-startTime)/60)) + " minutes"
 
-    #Download the Reference Genome
-    print "Converting Contigset to Fasta"
-    subprocess.check_call("contigset2fasta %s ref.fa" % (job['input']['reference']), shell=True)
+    dxpy.DXFile(job['input']['reference_file']).wait_on_close()
+    dxpy.download_dxfile(job['input']['reference_file'], "ref.fa")
 
     #RealignerTargetCreator
     command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T RealignerTargetCreator -R ref.fa -I input.bam -o indels.intervals "
@@ -554,175 +808,17 @@ def mapBestPractices():
     print command
     subprocess.check_call(command, shell=True)
 
-    subprocess.check_call("samtools view -h -o recalibrated.sam recalibrated.bam", shell=True)
-
     result = dxpy.upload_local_file("recalibrated.bam")
-    job['output']['recalibrated_bam'] = dxpy.dxlink(result.get_id())
     print "Recalibrated file: " + result.get_id()
-    referenceFile = dxpy.upload_local_file("ref.fa")
-    referenceFile.wait_on_close()
 
-    #Spin off GATK variant caller job
-    mapGatkInput = {
-            'mappings_file': result.get_id(),
-            'reference_file': referenceFile.get_id(),
-            'interval': job['input']['interval'],
-            'tableId': job['input']['variants_table'],
-            'command': job['input']['gatk_command'],
-            'compress_reference': job['input']['compress_reference'],
-            'infer_no_call': job['input']['infer_no_call'],
-            'compress_no_call': job['input']['compress_no_call'],
-            'part_number': job['input']['job_number']
-        }
-    # Run a "map" job for each chunk
-    gatkJob = dxpy.new_dxjob(fn_input=mapGatkInput, fn_name="mapGatk").get_id()
-
-    recalibratedTable = dxpy.DXGTable(job['input']['recalibrated_table_id'])
-
-    default = {}
-
-    recalibratedColNames = recalibratedTable.get_col_names()
-    recalibratedCol = {}
-    for i in range(len(recalibratedColNames)):
-        recalibratedCol[recalibratedColNames[i]] = i
-
-    for x in recalibratedTable.describe()['columns']:
-        if "int" in x["type"]:
-            default[x["name"]] = sys.maxint
-        elif x["type"] == "float":
-            default[x["name"]] = float(sys.maxint)
-        elif x["type"] == "boolean":
-            default[x["name"]] = False
-        else:
-            default[x["name"]] = ""
-
-    print "Writing mate pair information for lookup"
-    startTime = time.time()
-    if recalibratedCol.get("chr2") != None:
-        mateLocations = {}
-        for line in open("recalibrated.sam", 'r'):
-            if line[0] != "@":
-                tabSplit = line.split("\t")
-                chr = tabSplit[2]
-                lo = int(tabSplit[3])-1
-                templateId = tabSplit[0]
-                cigar = re.split('(\d+)', tabSplit[5])
-                alignLength = 0
-                for p in range(len(cigar)):
-                    c = cigar[p]
-                    if c == 'M' or c == 'D' or c == 'N' or c == 'X' or c == 'P' or c == '=':
-                        alignLength += int(cigar[p-1])
-                hi = lo + alignLength
-
-                recalibrationTags = re.findall("zd:Z:([^\t]*)[\t\n]", line)[0].split("##&##")
-                reportedLo = int(recalibrationTags[1])
-                reportedHi = int(recalibrationTags[2])
-                if lo != reportedLo or hi != reportedHi:
-                    if int(tabSplit[1]) & 0x1 & 0x40:
-                        mateLocations[templateId] = {0: {"lo":lo, "hi":hi, "chr":chr}}
-                    elif int(tabSplit[1]) & 0x1 & 0x80:
-                        mateLocations[templateId] = {1: {"lo":lo, "hi":hi, "chr":chr}}
-        print str(len(mateLocations)) + " Interchromosomal reads changed lo or hi"
-    print "Interchromosome changes to lo and hi recorded in " + str(int((time.time()-startTime)/60)) + " minutes"
-
-    complement_table = string.maketrans("ATGCatgc", "TACGtacg")
-    rowsWritten = 0
-
-    startTime = time.time()
-    for line in open("recalibrated.sam", 'r'):
-        if line[0] != "@":
-            tabSplit = line.split("\t")
-            templateId = int(tabSplit[0].split("_")[1])
-            flag = int(tabSplit[1])
-            chr = tabSplit[2]
-            lo = int(tabSplit[3])-1
-            qual = tabSplit[10]
-            alignLength = 0
-            mapq = int(tabSplit[4])
-            cigar = re.split('(\d+)', tabSplit[5])
-            duplicate = (flag & 0x400 == True)
-            sequence = tabSplit[9]
-            recalibrationTags = re.findall("zd:Z:([^\t]*)[\t\n]", line)[0].split("##&##")
-
-            name = recalibrationTags[0]
-            readGroup = int(re.findall("RG:Z:(\d+)", line)[0])
-
-            if flag & 0x4:
-                status = "UNMAPPED"
-            elif flag & 0x100:
-                status = "SECONDARY"
-            else:
-                status = "PRIMARY"
-            if flag & 0x200:
-                qcFail = True
-            else:
-                qcFail = False
-            if flag & 0x10 == 0 or status == "UNMAPPED":
-                negativeStrand = False
-            else:
-                negativeStrand = True
-                sequence = sequence.translate(complement_table)[::-1]
-                qual = qual[::-1]
-
-            for p in range(len(cigar)):
-                c = cigar[p]
-                if c == 'M' or c == 'D' or c == 'N' or c == 'X' or c == 'P' or c == '=':
-                    alignLength += int(cigar[p-1])
-            cigar = tabSplit[5]
-            hi = lo + alignLength
-
-            if recalibratedCol.get("chr2") != None:
-                properPair=False
-                if (flag & 0x1) and (flag & 0x2):
-                    properPair = True
-
-                reportedChr2 = recalibrationTags[3]
-                reportedLo2 = int(recalibrationTags[4])
-                reportedHi2 = int(recalibrationTags[5])
-                status2 = recalibrationTags[6]
-
-                if not flag & 0x1:
-                    negativeStrand2 = False
-                elif flag & 0x20 and status2 != "UNMAPPED":
-                    negativeStrand2 = True
-                else:
-                    negativeStrand2 = False
-
-                if flag & 0x1:
-                    if flag & 0x40:
-                        mateId = 0
-                    elif flag & 0x80:
-                        mateId = 1
-                else:
-                    mateId = -1
-
-                try:
-                    if mateId == 1:
-                        chr2 = mateLocations[tabSplit[0]][0]["chr2"]
-                        lo2 = mateLocations[tabSplit[0]][0]["lo"]
-                        hi2 = mateLocations[tabSplit[0]][0]["hi"]
-                    elif mateId == 0:
-                        chr2 = mateLocations[tabSplit[0]][1]["chr2"]
-                        lo2 = mateLocations[tabSplit[0]][1]["lo"]
-                        hi2 = mateLocations[tabSplit[0]][1]["hi"]
-                    else:
-                        chr2 = reportedChr2
-                        lo2 = reportedLo2
-                        hi2 = reportedHi2
-                except:
-                    chr2 = reportedChr2
-                    lo2 = reportedLo2
-                    hi2 = reportedHi2
-                recalibratedTable.add_rows([[sequence, name, qual, status, chr, lo, hi, negativeStrand, mapq, qcFail, duplicate, cigar, templateId, readGroup, mateId, status2, chr2, lo2, hi2, negativeStrand2, properPair]])
-            else:
-                recalibratedTable.add_rows([[sequence, name, qual, status, chr, lo, hi, negativeStrand, mapq, qcFail, duplicate, cigar, templateId, readGroup]])
-            rowsWritten += 1
-            if rowsWritten%100000 == 0:
-                print "Imported " + str(rowsWritten) + " rows. Time taken: " + str(int((time.time()-startTime)/60)) + " minutes"
-                recalibratedTable.flush()
-    recalibratedTable.flush()
-
-    job['output']['gatk_job'] = gatkJob
+    #Spin off Import Recalibrated Mappings job
+    importRecalibratedMappingsInput = {
+        'recalibrated_bam': result.get_id(),
+        'recalibrated_table_id': job['input']['recalibrated_table_id']
+    }
+    job['output']['import_job'] = dxpy.new_dxjob(fn_input=importRecalibratedMappingsInput, fn_name="importRecalibratedMappings").get_id()
+    
+    job['output']['recalibrated_bam'] = result.get_id()
     job['output']['ok'] = True
 
 def splitGenomeLengthChromosome(contig_set, chunks):
@@ -817,9 +913,6 @@ def createNewMappingsTable(mappingsArray, recalibratedName):
             if x not in types:
                 types.append(x)
 
-    print "combined columns"
-    print columns
-
     schema = [{"name": "sequence", "type": "string"}]
     schema.append({"name": "name", "type": "string"})
     schema.append({"name": "quality", "type": "string"})
@@ -858,7 +951,7 @@ def createNewMappingsTable(mappingsArray, recalibratedName):
 
 def buildCommand(job):
 
-    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T UnifiedGenotyper -R ref.fa -I input.bam -o output.vcf "
+    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T UnifiedGenotyper -R ref.fa -o output.vcf "
     if job['input']['output_mode'] != "EMIT_VARIANTS_ONLY":
         command += " -out_mode " + (job['input']['output_mode'])
     if job['input']['call_confidence'] != 30.0:
@@ -955,19 +1048,179 @@ def translateTagTypeToColumnType(tag):
   return "string"
 
 
-def mapGatk():
-
+def recalibrateVariants():
     os.environ['CLASSPATH'] = '/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/GenomeAnalysisTK.jar:opt/jar/CreateSequenceDictionary.jar'
-    print os.environ
+    
+    dxpy.download_dxfile(job['input']['reference_file'], "ref.fa")
+    subprocess.check_call("java -Xmx4g net.sf.picard.sam.CreateSequenceDictionary REFERENCE=ref.fa OUTPUT=ref.dict" ,shell=True)
+    
+    numVariants = mergeVcfs(job['input']['vcfs'])
+    recalibratedVariantsTable = dxpy.DXGTable(job['input']['recalibrated_variants_table'])
+    
+    command = "java -Xmx12g org.broadinstitute.sting.gatk.CommandLineGATK -T VariantRecalibrator -input merged.sorted.vcf -tranchesFile model.tranches -recalFile model.recal -R ref.fa -rscriptFile model.plots.R -mode %s" % job['input']["genotype_likelihood_model"]
 
+    count = 0
+    for resource in job['input'].get('gatk_resources'):
+        fh = dxpy.DXFile(resource)
+        fileDetails = fh.get_details()
+        fileName = "gatk_resource%d.%s.gz" %  (count, fileDetails['resource_type'].lower())
+        dxpy.download_dxfile(resource, fileName)        
+
+        p = subprocess.Popen("tabix -f -p %s %s " % (fileDetails['resource_type'].lower(), fileName), stderr=subprocess.PIPE, shell=True)
+        if '[tabix] was bgzip' in p.communicate()[1]:
+            subprocess.check_call("mv gatk_resource%d.%s.gz gatk_resource%d.%s" % (count, fileDetails['resource_type'].lower(), count, fileDetails['resource_type'].lower()), shell=True)
+            fileName = "gatk_resource%d.%s" %  (count, fileDetails['resource_type'])
+
+            
+        command += " -resource:%s,%s,known=%s,training=%s,truth=%s,prior=%f %s" % (fileDetails['name'], fileDetails['resource_type'], str(fileDetails['known']).lower(), str(fileDetails['training']).lower(), str(fileDetails['truth']).lower(), fileDetails['prior'], fileName)    
+        count += 1
+                
+    if numVariants < 500000 and job["input"].get("gatk_recalibration_model") == None:
+        if job['input'].get("max_gaussians") == None:
+            job['input']["max_gaussians"] = 4
+        if job['input'].get("fraction_bad") == None:
+            job['input']["fraction_bad"] = 0.05
+    if numVariants < 100000 and job["input"].get("gatk_recalibration_model") == None:
+        if job['input'].get("max_gaussians") == None:
+            job['input']["max_gaussians"] = 2
+        if job['input'].get("fraction_bad") == None:
+            job['input']["fraction_bad"] = 0.25
+        print "There were very few variants. Consider adding additional variant set from the publicly available exome dataset."
+            
+    if job["input"].get("max_gaussians") != None:
+        command += " --maxGaussians %d" % job["input"]["max_gaussians"]
+    else:
+        command += " --maxGaussians 6"
+    if job["input"].get("max_iterations") != None:
+        command += " --maxIterations %d" % job["input"]["max_iterations"]
+    if job["input"].get("num_k_means") != None:
+        command += " --numKMeans %d" % job["input"]["num_k_means"]
+    if job["input"].get("std_threshold") != None:
+        command += " --stdThreshold %f" % job["input"]["std_threshold"]
+    if job["input"].get("qual_threhsold") != None:
+        command += " --qualThreshold %f" % job["input"]["qual_threshold"]
+    if job["input"].get("shrinkage") != None:
+        command += " -shrinkage %f" % job["input"]["shrinkage"]
+    if job["input"].get("dirichlet") != None:
+        command += " --dirichlet %f" % job["input"]["dirichlet"]
+    if job["input"].get("prior_counts") != None:
+        command += " --priorCounts %d" % job["input"]["prior_counts"]
+    if job["input"].get("fraction_bad") != None:
+        command += " -percentBad %f" % job["input"]["fraction_bad"]
+    if job["input"].get("min_num_bad_variants") != None:
+        command += " -minNumBad %d" % job["input"]["min_num_bad_variants"]
+    if job["input"].get("ti_tv_target") != None:
+        command += " -titv %f" % job["input"]["ti_tv_target"]
+    if job["input"].get("ignore_filter") != None:
+        for x in job["input"].get("ignore_filter"):
+            command += " -ignoreFilter %s" % x
+    command += " -ts_filter_level %f" % job["input"]["ts_filter_level"]
+    if job["input"].get("trust_all_polymorphic"):
+        command += " -allPoly"
+    command += " --num_threads " + str(cpu_count())
+    
+    annotations = []
+    if job["input"].get("genotype_likelihood_model"):
+        if job["input"].get("variant_recalibrator_annotations") != "" and not job["input"]["use_default_annotations"]:
+            annotations = checkAnnotations(vcf)
+            if len(annotations) == 0:
+                print "WARNING: Found no usable annotations, switching to default annotations"
+    
+    if job["input"]["use_default_annotations"] or annotations == []:
+        if job["input"].get("genotype_likelihood_model") == "INDEL":
+            annotations = checkAnnotations(open("merged.sorted.vcf", 'r'), ["QD", "FS", "HaplotypeScore", "ReadPosRankSum", "InbreedingCoeff"])
+        else:
+            annotations = checkAnnotations(open("merged.sorted.vcf", 'r'), ["QD", "FS", "HaplotypeScore", "MQRankSum", "ReadPosRankSum", "FS", "MQ", "InbreedingCoeff", "DP"])
+
+    if job["input"].get("gatk_recalibration_model") != None:
+        dxpy.download_dxfile(dxpy.DXFile(job["input"]["gatk_recalibration_model"]).get_id(), "model.tar.gz")
+        subprocess.check_call("tar -xvzf model.tar.gz", shell=True)
+        i = 0
+        while 1:
+            try:
+                modelFile = open("model_file%d.vcf" % i, 'r')
+                modelFile.close()
+                command += " -input model_file%d.vcf" % i
+                i += 1
+            except:
+                break
+    
+    for x in annotations:
+        command += " -an " + x
+
+
+    # Do variant recalibration model
+    print command
+    subprocess.check_call(command, shell=True)
+    
+    # Apply variant recalibration model
+    
+    subprocess.check_call("java -Xmx12g org.broadinstitute.sting.gatk.CommandLineGATK -T ApplyRecalibration -input merged.sorted.vcf -tranchesFile model.tranches -recalFile model.recal -R ref.fa -o recalibrated.vcf -ts_filter_level %s " % job["input"]["ts_filter_level"], shell = True)
+    
+    command = "dx_vcfToVariants2 --table_id %s --vcf_file recalibrated.vcf" % (recalibratedVariantsTable.get_id())
+    if job['input']['compress_reference']:
+        command += " --compress_reference"
+    if job['input']['infer_no_call']:
+        command += " --infer_no_call"
+    if job['input']['compress_no_call']:
+        command += " --compress_no_call"
+    print "Parsing Variants"
+    subprocess.check_call(command, shell=True)
+    
+    job['output']['ok'] = True
+    
+def checkAnnotations(vcfFile, annotations):
+    presentAnnotations = []
+    count = 0
+    for line in vcfFile:
+        if line[0] != "#":
+            entries = line.split("\t")[7]
+            for x in entries.split(";"):
+                if x.split("=")[0] in annotations:
+                    presentAnnotations.append(x.split("=")[0])
+                    annotations.remove(x.split("=")[0])
+            count += 1
+            if count > 10000 or len(annotations) == 0:
+                break
+    return presentAnnotations
+    
+def mergeVcfs(vcfs):
+    
+    command = "vcf-concat"
+    for i in range(len(vcfs)):
+        dxpy.download_dxfile(dxpy.DXFile(vcfs[i]).get_id(), str(i)+".vcf")
+        command += " %d.vcf" % i
+    command += " > merged.vcf"
+        
+    
+    subprocess.check_call(command, shell=True)
+    
+    count = 0
+    for line in open("merged.vcf", 'r'):
+        if line[0] != "#":   
+            count += 1
+        
+    subprocess.check_call("vcfsorter.pl ref.dict merged.vcf > merged.sorted.vcf", shell=True)
+        
+    return count
+
+def mapGatk():
+    os.environ['CLASSPATH'] = '/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/GenomeAnalysisTK.jar:opt/jar/CreateSequenceDictionary.jar'
+    
     regionFile = open("regions.txt", 'w')
     regionFile.write(job['input']['interval'])
 
     regionFile.close()
+    for x in job['input']['mappings_files']:
+        dxpy.DXFile(x).wait_on_close()
+    dxpy.DXFile(job['input']['reference_file']).wait_on_close()
 
-    dxpy.DXFile(job['input']['mappings_file']).wait_on_close()
-
-    dxpy.download_dxfile(job['input']['mappings_file'], "input.bam")
+    for i in range(len(job['input']['mappings_files'])):        
+        dxpy.download_dxfile(job['input']['mappings_files'][i], "input.%d.bam" % i)
+        subprocess.check_call("samtools index input.%d.bam" % i, shell=True)
+        job['input']['command'] += " -I input.%d.bam" % i
+    
+    dxpy.DXFile(job['input']['reference_file']).wait_on_close()
     dxpy.download_dxfile(job['input']['reference_file'], "ref.fa")
 
     gatkIntervals = open("regions.interval_list", 'w')
@@ -975,30 +1228,28 @@ def mapGatk():
         gatkIntervals.write(x[0] + ":" + x[1] + "-" + x[2] + "\n")
     gatkIntervals.close()
 
-    print "Converting Table to SAM"
-    if 1:
-        print "Indexing"
-        subprocess.check_call("samtools index input.bam", shell=True)
-        print "Indexing Reference"
-        subprocess.check_call("samtools faidx ref.fa", shell=True)
-        subprocess.check_call("java -Xmx4g net.sf.picard.sam.CreateSequenceDictionary REFERENCE=ref.fa OUTPUT=ref.dict" ,shell=True)
+    print "Indexing Reference"
+    subprocess.check_call("samtools faidx ref.fa", shell=True)
+    subprocess.check_call("java -Xmx4g net.sf.picard.sam.CreateSequenceDictionary REFERENCE=ref.fa OUTPUT=ref.dict" ,shell=True)
 
-        command = job['input']['command'] + job['input']['interval']
-        #print command
-        print "In GATK"
-        subprocess.check_call(command, shell=True)
-        #command += " | "
+    command = job['input']['command'] + job['input']['interval']
+    #print command
+    print "In GATK"
+    subprocess.check_call(command, shell=True)
 
-        command = "dx_vcfToVariants2 --table_id %s --vcf_file output.vcf --region_file regions.txt" % (job['input']['tableId'])
-        if job['input']['compress_reference']:
-            command += " --compress_reference"
-        if job['input']['infer_no_call']:
-            command += " --infer_no_call"
-        if job['input']['compress_no_call']:
-            command += " --compress_no_call"
+    command = "dx_vcfToVariants2 --table_id %s --vcf_file output.vcf --region_file regions.txt" % (job['input']['tableId'])
+    if job['input']['compress_reference']:
+        command += " --compress_reference"
+    if job['input']['infer_no_call']:
+        command += " --infer_no_call"
+    if job['input']['compress_no_call']:
+        command += " --compress_no_call"
 
-        print "Parsing Variants"
-        subprocess.check_call(command, shell=True)
+    file_id = dxpy.upload_local_file("output.vcf").get_id()
 
-    #job['output']['id'] = job['input']['mappings_table_id']
+    print "Parsing Variants"
+    subprocess.check_call(command, shell=True)
+
+
+    job['output']['file_id'] = file_id
     job['output']['ok'] = True

@@ -91,7 +91,7 @@
     {"name": "ti_tv_target", "class": "float", "label": "Ti-Tv Target", "help": "In variant recalibrator, the expected novel Ti/Tv ratio ratio. Only used for plotting purposes", "optional":true},
     {"name": "ignore_filter", "class": "array:string", "label": "Ignore Filters", "help": "In variant recalibrator, ignore the following filters", "optional":true},
     {"name": "ts_filter_level", "class": "int", "label": "TS Filter Level", "help": "In variant recalibrator, the sensitivity level to start filtering at;.", "optional":true, "default":95},
-    {"name": "trust_all_polymorphic", "class":"boolean", "label":"Trust All Polymorphic Sites", "help": "In variant recalibrator, trust that all the input traning sets' unfiltered records contain only polymorphic sites to drastically speed up computation"},
+    {"name": "trust_all_polymorphic", "class":"boolean", "label":"Trust All Polymorphic Sites", "help": "In variant recalibrator, trust that all the input traning sets' unfiltered records contain only polymorphic sites to drastically speed up computation", "optional":true},
     {"name": "use_default_annotations", "class":"boolean", "label":"Use Default Annotations", "help": "Use the default list of annotations for variant recalibration", "default":true},
     {"name": "variant_recalibrator_annotations", "class":"array:string", "label":"Variant Recalibrator Annotations", "help":"A list of info tag annotations to use for variant recalibration. This is only applied if use_default_annotations is set to false", "optional":true}    
   ],

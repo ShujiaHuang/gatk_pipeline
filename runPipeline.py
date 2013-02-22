@@ -342,7 +342,7 @@ def buildVariantsTable(job, mappingsTable, samples, reference_id, appendToName):
     variantsTable = dxpy.open_dxgtable(tableId)
     variantsTable.add_types(["Variants", "gri"])
 
-    details = {'samples':samples, 'original_contigset':reference_id, 'formats':headerInfo['tags']['format'], 'infos':headerInfo['tags']['info']}
+    details = {'samples':samples, 'original_contigset':dxpy.dxlink(reference_id), 'formats':headerInfo['tags']['format'], 'infos':headerInfo['tags']['info']}
     #if headerInfo.get('filters') != {}:
     #  details['filters'] = headerInfo['filters']
     variantsTable.set_details(details)

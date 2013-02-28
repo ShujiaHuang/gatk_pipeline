@@ -310,7 +310,6 @@ def buildVariantsTable(job, mappingsTable, samples, reference_id, appendToName):
     elevatedTags = ['format_GT', 'format_DP', 'format_AD']
     headerInfo = extractHeader("/tmp/header.txt", elevatedTags)
     description = {}
-    samples = []
 
     indices = [dxpy.DXGTable.genomic_range_index("chr","lo","hi", 'gri')]
 

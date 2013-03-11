@@ -41,7 +41,23 @@ def main():
     ## RUN DEDUPLICATE
     os.environ['CLASSPATH'] = '/opt/jar/MarkDuplicates.jar:/opt/jar/MergeSamFiles.jar:/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/GenomeAnalysisTK.jar'
 
-    #mappingsTable = dxpy.open_dxgtable(job['input']['mappings'][0]['$dnanexus_link'])
+    #Check that resources have the necessary requirements
+    
+    known = False
+    training = False
+    truth = False
+    if job['input'].get('gatk_resources') != None:
+        for x in job['input']['gatk_resources']:
+            if x.get_details().get["known"] == True:
+                known = True
+            if x.get_details().get["training"] == True:
+                training = True
+            if x.get_details().get["truth"] == True:
+                truth = True
+        if not known or not training or not truth:
+            raise dxpy.AppError("If any GATK recalibration resources are provided, at least one of each category: \"Known\", \"Training\", and \"Truth\" are required. Please either add an example of each, or do not provide any recalibation resources.")
+
+
     if 'output_name' in job['input']:
         outputName = job['input']['output_name']
     else:

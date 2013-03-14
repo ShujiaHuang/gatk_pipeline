@@ -386,7 +386,7 @@ def mapInterchromosome():
     
     sampleName = "Sample_0"
     if job['input']['call_multiple_samples']:
-        sampleName = dxpoy.DXGTable(mappingsTable).describe()['name'].replace(" ", "_")
+        sampleName = dxpy.DXGTable(mappingsTable).describe()['name'].replace(" ", "_")
     
     jobNumber = job['input']['job_number']
     if jobNumber == -1:

@@ -217,7 +217,7 @@ def variantCallingCoordinator():
     for k, v in merges.iteritems():
         samples.append(k)
         if len(v) == 1:
-            subprocess.check_call("mv %s %s.bam" % (v[0], k), shell=True)
+            subprocess.check_call(["mv", v[0], k + ".bam"])
         else:
             print "Merging Sam Files"
             print k + ".bam"
@@ -1081,9 +1081,11 @@ def recalibrateVariants():
         fileName = "gatk_resource%d.%s.gz" %  (count, fileDetails['resource_type'].lower())
         dxpy.download_dxfile(resource, fileName)        
 
-        p = subprocess.Popen("tabix -f -p %s %s " % (fileDetails['resource_type'].lower(), fileName), stderr=subprocess.PIPE, shell=True)
+        p = subprocess.Popen(["tabix", "-f", "-p", fileDetails['resource_type'].lower(), fileName], stderr=subprocess.PIPE)
         if '[tabix] was bgzip' in p.communicate()[1]:
-            subprocess.check_call("mv gatk_resource%d.%s.gz gatk_resource%d.%s" % (count, fileDetails['resource_type'].lower(), count, fileDetails['resource_type'].lower()), shell=True)
+            subprocess.check_call(["mv",
+                                   "gatk_resource%d.%s.gz" % (count, fileDetails['resource_type'].lower()),
+                                   "gatk_resource%d.%s" % (count, fileDetails['resource_type'].lower())])
             fileName = "gatk_resource%d.%s" %  (count, fileDetails['resource_type'])
 
             

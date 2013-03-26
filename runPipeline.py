@@ -56,7 +56,7 @@ def main():
                 truth = True
         if not known or not training or not truth:
             raise dxpy.AppError("If any GATK recalibration resources are provided, at least one of each category: \"Known\", \"Training\", and \"Truth\" are required. Please either add an example of each, or do not provide any recalibation resources.")
-
+        
 
     if 'output_name' in job['input']:
         outputName = job['input']['output_name']
@@ -72,6 +72,9 @@ def main():
         originalContigSet = mappingsTable.get_details()['original_contigset']
     except:
         raise dxpy.AppError("The original reference genome must be attached as a detail")
+
+    if contigSetId != job['input']['reference']['$dnanexus_link']:
+        raise dxpy.AppError("The reference genome of the mappings does not match the provided reference genome")
 
     samples = []
     for x in job['input']['mappings']:
@@ -105,41 +108,10 @@ def main():
         excludeInterchromosome = (chunks > 1)
     
 
-        #This is a Picard Mark Duplicates job run only on interchromosomal mappings in the case that the genome is split into regions
-        #This is necessary because Mark Duplicates has to look at both mates in a read pair, so interchromosomal mappings must go together
-        reduceInterchromosomeInput = {}
-        bamFiles = []
-        if chunks > 1 and job['input']['deduplicate_interchromosomal_pairs']:
-            for i in xrange(-1, chunks):
-                bamFiles.append(dxpy.new_dxfile().get_id())
-                mapInterchromosomeInput = {
-                'mappings_tables': mappingsTable.get_id(),
-                'interval': commandList[i],
-                'job_number' : i,
-                'call_multiple_samples': job['input']['call_multiple_samples'],
-                'separate_read_groups' : job['input']['separate_read_groups']
-                }
-                interchromosomeJobId = dxpy.new_dxjob(fn_input=mapInterchromosomeInput, fn_name="mapInterchromosome").get_id()
-                reduceInterchromosomeInput["mapJob"+str(i)] = {'job': interchromosomeJobId, 'field': 'file_id'}
-            #interchromosomeJobField = { 'job': interchromosomeJobId, 'field': 'bam'}
-    
-            #Make a reduce job for the interchromosome component
-            reduceInterchromosomeInput["file_list"] =  bamFiles
-            reduceInterchromosomeInput["interval"] = commandList
-            reduceInterchromosomeInput["discard_duplicates"] = job['input']['discard_duplicates']
-            reduceJobId = dxpy.new_dxjob(fn_input=reduceInterchromosomeInput, fn_name="reduceInterchromosome").get_id()
-            deduplicateInterchromosome = True
-        else:
-            interchromosomeJobField = ''
-            deduplicateInterchromosome = False
-    
-        #This runs the Picard Mark Duplicates program to deduplicate the reads
-
         for i in range(len(commandList)):
             mapBestPracticesInput = {
                 'mappings_tables': mappingsTable.get_id(),
                 'recalibrated_table_id': recalibratedTable.get_id(),
-                'file_list': bamFiles,
                 'interval': commandList[i],
                 'job_number' : i,
                 'reference_file': referenceFile.get_id(),
@@ -148,7 +120,7 @@ def main():
                 'call_multiple_samples': job['input']['call_multiple_samples'],
                 'discard_duplicates': job['input']['discard_duplicates'],
                 'parent_input': job['input'],
-                'deduplicate_interchromosome': deduplicateInterchromosome,
+                'deduplicate_interchromosome': (job['input']['deduplicate_interchromosome'] or chunks == 1),
                 'gatk_command': gatkCommand,
                 'compress_reference': job['input']['compress_reference'],
                 'infer_no_call': job['input']['infer_no_call'],
@@ -183,6 +155,7 @@ def main():
 
 def mappingsImportCoordinator():
     
+    job['output'] = {"import_jobs": []}
     for x in job['input']['recalibrated_bam']:
         fileId = dxpy.DXFile(x).get_id()
     
@@ -191,8 +164,7 @@ def mappingsImportCoordinator():
             'recalibrated_bam': fileId,
             'recalibrated_table_id': job['input']['recalibrated_table_id']
         }
-    job['output'] = {"import_jobs": []}
-    job['output']['import_jobs'].append({'job':dxpy.new_dxjob(fn_input=importRecalibratedMappingsInput, fn_name="importRecalibratedMappings").get_id(), 'field':'ok'})
+        job['output']['import_jobs'].append({'job':dxpy.new_dxjob(fn_input=importRecalibratedMappingsInput, fn_name="importRecalibratedMappings").get_id(), 'field':'ok'})
 
 def variantCallingCoordinator():
     os.environ['CLASSPATH'] = '/opt/jar/MarkDuplicates.jar:/opt/jar/SamFormatConverter.jar:/opt/jar/SortSam.jar:/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/MergeSamFiles.jar:/opt/jar/GenomeAnalysisTK.jar:/opt/jar/AddOrReplaceReadGroups.jar'
@@ -375,77 +347,6 @@ def buildVariantsTable(job, mappingsTable, samples, reference_id, appendToName):
 
     return variantsTable
 
-def mapInterchromosome():
-    os.environ['CLASSPATH'] = '/opt/jar/MarkDuplicates.jar:/opt/jar/SamFormatConverter.jar:/opt/jar/SortSam.jar:/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/MergeSamFiles.jar:/opt/jar/GenomeAnalysisTK.jar:/opt/jar/AddOrReplaceReadGroups.jar'
-
-    mappingsTable = job['input']['mappings_tables']
-
-    regionFile = open("regions.txt", 'w')
-    regionFile.write(job['input']['interval'])
-    regionFile.close()
-    
-    sampleName = "Sample_0"
-    if job['input']['call_multiple_samples']:
-        sampleName = dxpoy.DXGTable(mappingsTable).describe()['name'].replace(" ", "_")
-    
-    jobNumber = job['input']['job_number']
-    if jobNumber == -1:
-        command = "pypy /usr/bin/dx_mappings_to_sam2 %s --output input.sam --id_as_name --only_unmapped --read_group_platform illumina --sample %s" % (mappingsTable)
-        print command
-        subprocess.check_call(command, shell=True)
-    else:
-        command = "pypy /usr/bin/dx_mappings_to_sam2 %s --output input.sam --id_as_name --region_index_offset -1 --region_file regions.txt --read_group_platform illumina --only_interchromosomal_mate --sample %s" % (mappingsTable.get_id())
-        print command
-        subprocess.check_call(command, shell=True)
-
-    if checkSamContainsRead("input.sam"):
-        subprocess.check_call("samtools view -bS output.sam > output.bam", shell=True)
-    else:
-        subprocess.check_call("samtools view -HbS output.sam > output.bam", shell=True)
-    fileId = dxpy.upload_local_file("output.bam").get_id()
-    job['output']['file_id'] = ''
-
-def reduceInterchromosome():
-    os.environ['CLASSPATH'] = '/opt/jar/MarkDuplicates.jar:/opt/jar/SamFormatConverter.jar:/opt/jar/SortSam.jar:/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/MergeSamFiles.jar:/opt/jar/GenomeAnalysisTK.jar:/opt/jar/AddOrReplaceReadGroups.jar'
-    i = -1
-    command = "java -Xmx4g net.sf.picard.sam.MergeSamFiles OUTPUT=merge.bam USE_THREADING=true SORT_ORDER=coordinate VALIDATION_STRINGENCY=SILENT"
-    noFiles = True
-    while "mapJob"+str(i) in job["input"]:
-        if job["input"]["mapJob"+str(i)] != '':
-            command += " INPUT=input."+str(i+1)+".bam"
-            dxpy.DXFile(job["input"]["mapJob"+str(i)]).wait_on_close()
-            dxpy.download_dxfile(job["input"]["mapJob"+str(i)], "input."+str(i+1)+".bam")
-            noFiles = False
-        i+=1
-
-    if noFiles:
-        for x in job['input']['file_list']:
-            dxpy.DXFile(x).close()
-    else:
-        subprocess.check_call(command, shell=True)
-        subprocess.check_call("java -Xmx4g net.sf.picard.sam.MarkDuplicates I=merge.bam O=dedup.bam METRICS_FILE=metrics.txt ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT REMOVE_DUPLICATES=%s" % job['input']['discard_duplicates'], shell=True)
-        #subprocess.check_call("samtools view -bS dedup.sam > dedup.bam", shell=True)
-        subprocess.check_call("samtools index dedup.bam", shell=True)
-        for i in range(len(job['input']['interval'])):
-            try:
-                startTime = time.time()
-                chromosomeFile = open("chromosome.bam", 'w')
-                chromosomeFile.close()
-                fileId = dxpy.DXFile(job['input']['file_list'][i])
-                command = "samtools view -b dedup.bam " + job['input']['interval'][i].replace(" -L ", " ") + " > chromosome.bam"
-                print command
-                subprocess.check_call(command, shell=True)
-                if os.stat('chromosome.bam').st_size > 0:
-                    dxpy.upload_local_file("chromosome.bam", use_existing_dxfile=fileId)
-                    print "Result upload completed in " + str(int((time.time()-startTime)/60)) + " minutes"
-                else:
-                    print "This interval was empty of reads"
-                    dxpy.DXFile(job['input']['file_list'][i]).close()
-            except:
-                print "Could not write this interval"
-                dxpy.DXFile(job['input']['file_list'][i]).close()
-    job['output']['ok'] = True
-    return
 
 def importRecalibratedMappings():
     recalibratedTable = dxpy.DXGTable(job['input']['recalibrated_table_id'])
@@ -618,9 +519,9 @@ def mapBestPractices():
     if job['input']['call_multiple_samples']:
         sampleName = dxpy.DXGTable(mappingsTable).describe()['name'].replace(" ", "_")
     
-    command = "pypy /usr/bin/dx_mappings_to_sam2 %s --output input.sam --region_index_offset -1 --id_as_name --region_file regions.txt --write_row_id --read_group_platform illumina --sample %s" % (mappingsTable, sampleName)
+    command = "pypy /usr/bin/dx_mappings_to_sam3 %s --output input.sam --region_index_offset -1 --id_as_name --region_file regions.txt --write_row_id --read_group_platform illumina --sample %s" % (mappingsTable, sampleName)
     if job['input']['deduplicate_interchromosome']:
-        command += " --no_interchromosomal_mate"
+        command += " --distribute_interchromosomal"
     print command
     startTime = time.time()
     subprocess.check_call(command, shell=True)
@@ -629,55 +530,29 @@ def mapBestPractices():
     readsPresent = False
 
     if checkSamContainsRead("input.sam"):
-        subprocess.check_call(command, shell=True)
-        subprocess.check_call("java -Xmx4g net.sf.picard.sam.MarkDuplicates I=input.sam O=dedup.sam METRICS_FILE=metrics.txt ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT REMOVE_DUPLICATES=%s" % job["input"]["discard_duplicates"], shell=True)
         startTime = time.time()
-        subprocess.check_call("samtools view -bS dedup.sam > dedup.bam", shell=True)
-        print "Conversion to BAM completed in " + str(int((time.time()-startTime)/60)) + " minutes"
+        subprocess.check_call("samtools view -bS input.sam > input.bam", shell=True)
+        subprocess.check_call("samtools sort input.bam input.sorted", shell=True)
+        subprocess.check_call("mv input.sorted.bam input.bam", shell=True)
+        subprocess.check_call("java -Xmx4g net.sf.picard.sam.MarkDuplicates I=input.bam O=dedup.bam METRICS_FILE=metrics.txt ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT REMOVE_DUPLICATES=%s" % job["input"]["discard_duplicates"], shell=True)
+        print "Mark Duplicates completed in: " + str(int((time.time()-startTime)/60)) + " minutes"
     else:
-        subprocess.check_call("samtools view -HbS dedup.sam > recalibrated.bam", shell=True)
+        #Just take the header since that will allow merge with an empty file
+        subprocess.check_call("samtools view -HbS input.sam > recalibrated.bam", shell=True)
         result = dxpy.upload_local_file("recalibrated.bam")
         job['output']['recalibrated_bam'] = result.get_id()
         job['output']['import_job'] = ''
         job['output']['ok'] = True
         return
 
-    ##THIS SEGMENT PROCEEDS AFTER MARKDUPLICATES COMPLETES
-    sleepTime = 10
-    sleepCounter = 0
-    startTime = time.time()
-    if jobNumber >  -1 and job['input']['deduplicate_interchromosome']:
-        if job['input']['file_list'][jobNumber] != '':
-            interchromosomeBamId = job['input']['file_list'][jobNumber]
-            interchromosomeBam = dxpy.DXFile(interchromosomeBamId)
-            while 1:
-                if interchromosomeBam.describe()['state'] != 'closed':
-                    time.sleep(sleepTime)
-                    sleepCounter += sleepTime
-                else:
-                    print "Waited " + str(sleepTime/60) + " minutes for interchromosome job"
-                    dxpy.download_dxfile(interchromosomeBamId, "interchromosomeBam.bam")
-                    print "Interchromosome BAM: " + interchromosomeBam.get_id()
-                    print "Download interchromosome BAM in " + str(int((time.time()-startTime)/60)) + " minutes"
-                    break
-
-    print "dedup file:" + dxpy.upload_local_file("dedup.bam").get_id()
-
-    if job['input']['file_list'] == []:
-        subprocess.check_call("mv dedup.bam input.bam", shell=True)
-    elif job['input']['file_list'][jobNumber] != '':
-        subprocess.check_call("java -Xmx4g net.sf.picard.sam.MergeSamFiles SORT_ORDER=coordinate USE_THREADING=true INPUT=dedup.bam INPUT=interchromosomeBam.bam OUTPUT=input.bam VALIDATION_STRINGENCY=SILENT", shell=True)
-    else:
-        subprocess.check_call("mv dedup.bam input.bam", shell=True)
-    startTime = time.time()
-    subprocess.check_call("samtools index input.bam", shell=True)
-    print "Index BAM completed in " + str(int((time.time()-startTime)/60)) + " minutes"
-
     dxpy.DXFile(job['input']['reference_file']).wait_on_close()
     dxpy.download_dxfile(job['input']['reference_file'], "ref.fa")
 
+    
+    subprocess.check_call("samtools index dedup.bam", shell=True)
+
     #RealignerTargetCreator
-    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T RealignerTargetCreator -R ref.fa -I input.bam -o indels.intervals "
+    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T RealignerTargetCreator -R ref.fa -I dedup.bam -o indels.intervals "
     command += job['input']['interval']
     knownIndels = ''
 
@@ -716,7 +591,7 @@ def mapBestPractices():
     subprocess.check_call(command, shell=True)
 
     #Run the IndelRealigner
-    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T IndelRealigner -R ref.fa -I input.bam -targetIntervals indels.intervals -o realigned.bam"
+    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T IndelRealigner -R ref.fa -I dedup.bam -targetIntervals indels.intervals -o realigned.bam"
     command += job['input']['interval']
     command += knownCommand
     if "consensus_model" in job['input']['parent_input']:
@@ -825,13 +700,6 @@ def mapBestPractices():
 
     result = dxpy.upload_local_file("recalibrated.bam")
     print "Recalibrated file: " + result.get_id()
-
-    #Spin off Import Recalibrated Mappings job
-    importRecalibratedMappingsInput = {
-        'recalibrated_bam': result.get_id(),
-        'recalibrated_table_id': job['input']['recalibrated_table_id']
-    }
-    job['output']['import_job'] = dxpy.new_dxjob(fn_input=importRecalibratedMappingsInput, fn_name="importRecalibratedMappings").get_id()
     
     job['output']['recalibrated_bam'] = result.get_id()
     job['output']['ok'] = True

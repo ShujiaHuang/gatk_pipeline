@@ -50,6 +50,7 @@ parser.add_argument("--discard_unmapped", dest="discard_unmapped", action="store
 parser.add_argument("--reference", dest="reference", default=None, help="Generating a SAM file requires information about the reference the reads were mapped to.  The Mappings SHOULD have a link to their reference, in the case they do not, or you wish to override that reference, you may optionally supply the ID of a ContigSet object to use instead.")
 parser.add_argument("--no_interchromosomal_mate", dest="no_interchromosomal", action="store_true", default=False, help="If selected, do not output reads where the mates are mapped to different chromosomes")
 parser.add_argument("--only_interchromosomal_mate", dest="only_interchromosomal", action="store_true", default=False, help="If selected, output only reads where the mates are mapped to different chromosomes. Selecting no_interchromosomal_mate will take precendence")
+parser.add_argument("--distribute_interchromosomal", dest="distribute_interchromosomal", action="store_true", default=False, help="If selected, the entire mappings table will be traversed. Only those reads which match the provided region will be added. Reads with interchromosomal read pairs will be added only if of the mates is in the region conditional on a distribution rule which uses the combination of chromosome names.")
 parser.add_argument("--add_to_read_group", dest="add_to_read_group", type=int, default=0, help="Add this number to the read groups in this table. Useful for combining the mappings from multiple tables")
 parser.add_argument("--read_group_platform", dest="read_group_platform", default="", help="If entered, will print this as the platform used for the read group in the SAM header")
 parser.add_argument("--write_row_id", dest="write_row_id", default=False, action="store_true", help="If selected, the row of the mappings table will be written into optional sam tag ZD")
@@ -79,9 +80,12 @@ def main(**kwargs):
     paired = "chr2" in mappingsTable.get_col_names()
 
     regions = []
+    chrs = {}
     if opts.region_file != "":
         regions = re.findall("-L ([^:]*):(\d+)-(\d+)", open(opts.region_file, 'r').read())
-
+        for x in regions:
+            chrs[x[0]] = True
+        
     name = mappingsTable.describe()['name']
 
     if opts.reference != None:
@@ -159,16 +163,7 @@ def main(**kwargs):
     #unmappedFile = open("unmapped.txt", 'w')
 
     if len(regions) == 0 and not opts.only_unmapped:
-
-        if opts.start_row > mappingsTable.describe()['length']:
-            raise dxpy.AppError("Starting row is larger than number of rows in table")
-        elif opts.end_row < opts.start_row:
-            raise dxpy.AppError("Ending row is before Start")
-
-        if opts.end_row > 0:
-            generator = mappingsTable.iterate_rows(start=opts.start_row, end=opts.end_row, want_dict=True)
-        else:
-            generator = mappingsTable.iterate_rows(start=opts.start_row, want_dict=True)
+        generator = makeTableGenerator(opts, mappingsTable)
 
         # write each row unless we're throwing out unmapped
         for row in generator:
@@ -182,9 +177,19 @@ def main(**kwargs):
                 elif opts.no_interchromosomal == False and opts.only_interchromosomal == False:
                     writeRow(row, col, defaultCol, outputFile, idAsName, idPrepend, writeRowId, addToReadGroup, column_descs, sam_cols, sam_col_names, sam_col_types)
 
+    elif opts.distribute_interchromosomal and paired:
+        generator = makeTableGenerator(opts,mappingsTable)
+        for row in generator:
+            if determineReadSelection(row["chr"], row["chr2"], chrs, row["status"], row["status2"], False):
+                writeRow(row, col, defaultCol, outputFile, idAsName, idPrepend, writeRowId, addToReadGroup, column_descs, sam_cols, sam_col_names, sam_col_types)
+        for row in mappingsTable.iterate_rows(want_dict=True):
+            if row["chr"] != "":
+                break
+            if determineReadSelection(row["chr"], row["chr2"], chrs, row["status"], row["status2"], True):
+                writeRow(row, col, defaultCol, outputFile, idAsName, idPrepend, writeRowId, addToReadGroup, column_descs, sam_cols, sam_col_names, sam_col_types)
 
     elif not opts.only_unmapped:
-        for x in regions:
+        for x in regions:            
             # generate the query for this region
             query = mappingsTable.genomic_range_query(x[0],int(x[1])+opts.region_index_offset,int(x[2])+opts.region_index_offset, index='gri')
             for row in mappingsTable.get_rows(query=query, limit=1)['data']:
@@ -305,7 +310,7 @@ def writeRow(row, col, defaultCol, outputFile, idAsName, idPrepend, writeRowId, 
             tlen *= -1
 
     out_row = [readName.strip("@"), str(flag), chromosome, str(lo), str(values["error_probability"]), values["cigar"] , chromosome2, str(lo2), str(tlen), seq, qual]
-    tag_values = {c: values[c] for c in sam_col_names if not tag_value_is_default(values[c])}
+    tag_values = {c: values[c] for c in sam_col_names if not tag_value_is_default(values[c])}        
 
     #out_row.extend([format_tag_field(name, value, sam_col_types) for name, value in tag_values.iteritems()])
 
@@ -358,6 +363,29 @@ def writeRow(row, col, defaultCol, outputFile, idAsName, idPrepend, writeRowId, 
     else:
         sys.stdout.write(out_row)
 
+def determineReadSelection(chr, chr2, chrs, status, status2, writeUnmapped):
+
+    #Neither read nor mate in region (or both unmapped)
+    if not chrs.get(chr) and not chrs.get(chr2):
+        return False
+    
+    if not writeUnmapped and (not chrs.get(chr) or not chrs.get(chr2)):
+        return False
+
+    #Both reads in same region, or one in region and other unmapped
+    if (chrs.get(chr) or status == "UNMAPPED") and (chrs.get(chr2) or status2 == "UNMAPPED"):
+        return True
+
+    if status != "UNMAPPED" and status2 != "UNMAPPED" and (chrs.get(chr) or chrs.get(chr2)):
+        assignment = 0
+        for x in chr+chr2:
+            assignment += ord(x)
+        if assignment%2 == 0:
+            return True
+            
+        
+            
+
 
 def reverseComplement(seq):
     rc = {"A":"T", "T":"A", "G":"C", "C":"G", "a":"T", "t":"A", "c":"G", "g":"C"}
@@ -365,6 +393,19 @@ def reverseComplement(seq):
     for x in seq[::-1]:
         result += rc.get(x, x)
     return result
+
+def makeTableGenerator(opts, mappingsTable):
+
+    if opts.start_row > mappingsTable.describe()['length']:
+        raise dxpy.AppError("Starting row is larger than number of rows in table")
+    elif opts.end_row < opts.start_row:
+        raise dxpy.AppError("Ending row is before Start")
+
+    if opts.end_row > 0:
+        return mappingsTable.iterate_rows(start=opts.start_row, end=opts.end_row, want_dict=True)
+    else:
+        return mappingsTable.iterate_rows(start=opts.start_row, want_dict=True)
+
 
 
 if __name__ == '__main__':

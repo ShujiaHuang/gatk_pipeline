@@ -85,7 +85,7 @@ def main():
     gatkCommand = buildCommand(job)
 
     subprocess.check_call("dx-contigset-to-fasta %s ref.fa" % (job['input']['reference']['$dnanexus_link']), shell=True)
-    referenceFile = dxpy.upload_local_file("ref.fa")
+    referenceFile = dxpy.upload_local_file("ref.fa", wait_on_close=True)
 
 
     reduceInput = {}
@@ -222,7 +222,7 @@ def variantCallingCoordinator():
         inputFiles = []
         for j in range(len(samples)):
             
-            inputFiles.append(dxpy.upload_local_file("%s.bam" % samples[j]).get_id())
+            inputFiles.append(dxpy.upload_local_file("%s.bam" % samples[j], wait_on_close=True).get_id())
             
         mapGatkInput = {
             'mappings_files': inputFiles,
@@ -538,7 +538,7 @@ def mapBestPractices():
     else:
         #Just take the header since that will allow merge with an empty file
         subprocess.check_call("samtools view -HbS input.sam > recalibrated.bam", shell=True)
-        result = dxpy.upload_local_file("recalibrated.bam")
+        result = dxpy.upload_local_file("recalibrated.bam", wait_on_close=True)
         job['output']['recalibrated_bam'] = result.get_id()
         job['output']['import_job'] = ''
         job['output']['ok'] = True
@@ -697,7 +697,7 @@ def mapBestPractices():
     print command
     subprocess.check_call(command, shell=True)
 
-    result = dxpy.upload_local_file("recalibrated.bam")
+    result = dxpy.upload_local_file("recalibrated.bam", wait_on_close=True)
     print "Recalibrated file: " + result.get_id()
     
     job['output']['recalibrated_bam'] = result.get_id()
@@ -1129,7 +1129,7 @@ def mapGatk():
     if job['input']['compress_no_call']:
         command += " --compress_no_call"
 
-    file_id = dxpy.upload_local_file("output.vcf").get_id()
+    file_id = dxpy.upload_local_file("output.vcf", wait_on_close=True).get_id()
 
     print "Parsing Variants"
     subprocess.check_call(command, shell=True)

@@ -376,28 +376,33 @@ def importRecalibratedMappings():
     if recalibratedCol.get("chr2") != None:
         mateLocations = {}
         for line in open("recalibrated.sam", 'r'):
-            if line[0] != "@":
-                tabSplit = line.split("\t")
-                if len(tabSplit) > 9:
-                    chr = tabSplit[2]
-                    lo = int(tabSplit[3])-1
-                    templateId = int(tabSplit[0])
-                    cigar = re.split('(\d+)', tabSplit[5])
-                    alignLength = 0
-                    for p in range(len(cigar)):
-                        c = cigar[p]
-                        if c == 'M' or c == 'D' or c == 'N' or c == 'X' or c == 'P' or c == '=':
-                            alignLength += int(cigar[p-1])
-                    hi = lo + alignLength
-    
-                    recalibrationTags = re.findall("zd:Z:([^\t]*)[\t\n]", line)[0].split("##&##")
-                    reportedLo = int(recalibrationTags[1])
-                    reportedHi = int(recalibrationTags[2])
-                    if lo != reportedLo or hi != reportedHi:
-                        if int(tabSplit[1]) & 0x1 & 0x40:
-                            mateLocations[templateId] = {0: {"lo":lo, "hi":hi, "chr":chr}}
-                        elif int(tabSplit[1]) & 0x1 & 0x80:
-                            mateLocations[templateId] = {1: {"lo":lo, "hi":hi, "chr":chr}}
+            try:
+                if line[0] != "@":
+                    tabSplit = line.split("\t")
+                    if len(tabSplit) > 9:
+                        chr = tabSplit[2]
+                        lo = int(tabSplit[3])-1
+                        templateId = int(tabSplit[0])
+                        cigar = re.split('(\d+)', tabSplit[5])
+                        alignLength = 0
+                        for p in range(len(cigar)):
+                            c = cigar[p]
+                            if c == 'M' or c == 'D' or c == 'N' or c == 'X' or c == 'P' or c == '=':
+                                alignLength += int(cigar[p-1])
+                        hi = lo + alignLength
+        
+                        recalibrationTags = re.findall("zd:Z:([^\t]*)[\t\n]", line)[0].split("##&##")
+                        reportedLo = int(recalibrationTags[1])
+                        reportedHi = int(recalibrationTags[2])
+                        
+                        if lo != reportedLo or hi != reportedHi:
+                            if int(tabSplit[1]) & 0x1 & 0x40:
+                                mateLocations[templateId] = {0: {"lo":lo, "hi":hi, "chr":chr}}
+                            elif int(tabSplit[1]) & 0x1 & 0x80:
+                                mateLocations[templateId] = {1: {"lo":lo, "hi":hi, "chr":chr}}
+            except:
+                print line
+                raise dxpy.AppError("The resulting BAM may have had a trucated line. This may be the result of a random error and it's possible a retry of the same job will work.")
         print str(len(mateLocations)) + " Interchromosomal reads changed lo or hi"
     print "Interchromosome changes to lo and hi recorded in " + str(int((time.time()-startTime)/60)) + " minutes"
 
@@ -406,97 +411,104 @@ def importRecalibratedMappings():
 
     startTime = time.time()
     for line in open("recalibrated.sam", 'r'):
-        if line[0] != "@":
-            tabSplit = line.split("\t")
-            if len(tabSplit) > 9:
-                templateId = int(tabSplit[0])
-                flag = int(tabSplit[1])
-                chr = tabSplit[2]
-                lo = int(tabSplit[3])-1
-                qual = tabSplit[10]
-                alignLength = 0
-                mapq = int(tabSplit[4])
-                cigar = re.split('(\d+)', tabSplit[5])
-                duplicate = (flag & 0x400 == True)
-                sequence = tabSplit[9]
-                recalibrationTags = re.findall("zd:Z:([^\t]*)[\t\n]", line)[0].split("##&##")
-    
-                name = recalibrationTags[0]
-                readGroup = int(re.findall("RG:Z:(\d+)", line)[0])
-    
-                if flag & 0x4:
-                    status = "UNMAPPED"
-                elif flag & 0x100:
-                    status = "SECONDARY"
-                else:
-                    status = "PRIMARY"
-                if flag & 0x200:
-                    qcFail = True
-                else:
-                    qcFail = False
-                if flag & 0x10 == 0 or status == "UNMAPPED":
-                    negativeStrand = False
-                else:
-                    negativeStrand = True
-                    sequence = sequence.translate(complement_table)[::-1]
-                    qual = qual[::-1]
-    
-                for p in range(len(cigar)):
-                    c = cigar[p]
-                    if c == 'M' or c == 'D' or c == 'N' or c == 'X' or c == 'P' or c == '=':
-                        alignLength += int(cigar[p-1])
-                cigar = tabSplit[5]
-                hi = lo + alignLength
-    
-                if recalibratedCol.get("chr2") != None:
-                    properPair=False
-                    if (flag & 0x1) and (flag & 0x2):
-                        properPair = True
-    
-                    reportedChr2 = recalibrationTags[3]
-                    reportedLo2 = int(recalibrationTags[4])
-                    reportedHi2 = int(recalibrationTags[5])
-                    status2 = recalibrationTags[6]
-    
-                    if not flag & 0x1:
-                        negativeStrand2 = False
-                    elif flag & 0x20 and status2 != "UNMAPPED":
-                        negativeStrand2 = True
+        try:
+            if line[0] != "@":
+                tabSplit = line.split("\t")
+                if len(tabSplit) > 9:
+                    templateId = int(tabSplit[0])
+                    flag = int(tabSplit[1])
+                    chr = tabSplit[2]
+                    lo = int(tabSplit[3])-1
+                    qual = tabSplit[10]
+                    alignLength = 0
+                    mapq = int(tabSplit[4])
+                    cigar = re.split('(\d+)', tabSplit[5])
+                    duplicate = (flag & 0x400 == True)
+                    sequence = tabSplit[9]
+                    recalibrationTags = re.findall("zd:Z:([^\t]*)[\t\n]", line)[0].split("##&##")
+        
+                    name = recalibrationTags[0]
+                    readGroup = int(re.findall("RG:Z:(\d+)", line)[0])
+        
+                    if flag & 0x4:
+                        status = "UNMAPPED"
+                    elif flag & 0x100:
+                        status = "SECONDARY"
                     else:
-                        negativeStrand2 = False
-    
-                    if flag & 0x1:
-                        if flag & 0x40:
-                            mateId = 0
-                        elif flag & 0x80:
-                            mateId = 1
+                        status = "PRIMARY"
+                    if flag & 0x200:
+                        qcFail = True
                     else:
-                        mateId = -1
-    
-                    try:
-                        if mateId == 1:
-                            chr2 = mateLocations[tabSplit[0]][0]["chr2"]
-                            lo2 = mateLocations[tabSplit[0]][0]["lo"]
-                            hi2 = mateLocations[tabSplit[0]][0]["hi"]
-                        elif mateId == 0:
-                            chr2 = mateLocations[tabSplit[0]][1]["chr2"]
-                            lo2 = mateLocations[tabSplit[0]][1]["lo"]
-                            hi2 = mateLocations[tabSplit[0]][1]["hi"]
+                        qcFail = False
+                    if flag & 0x10 == 0 or status == "UNMAPPED":
+                        negativeStrand = False
+                    else:
+                        negativeStrand = True
+                        sequence = sequence.translate(complement_table)[::-1]
+                        qual = qual[::-1]
+        
+                    for p in range(len(cigar)):
+                        c = cigar[p]
+                        if c == 'M' or c == 'D' or c == 'N' or c == 'X' or c == 'P' or c == '=':
+                            alignLength += int(cigar[p-1])
+                    cigar = tabSplit[5]
+                    hi = lo + alignLength
+        
+                    if recalibratedCol.get("chr2") != None:
+                        properPair=False
+                        if (flag & 0x1) and (flag & 0x2):
+                            properPair = True
+                        try:
+                            reportedChr2 = recalibrationTags[3]
+                            reportedLo2 = int(recalibrationTags[4])
+                            reportedHi2 = int(recalibrationTags[5])
+                            status2 = recalibrationTags[6]
+                        except:
+                            print line
+                            raise dxpy.AppError("The resulting BAM may have had a trucated line. This may be the result of a random error and it's possible a retry of the same job will work.")
+        
+                        if not flag & 0x1:
+                            negativeStrand2 = False
+                        elif flag & 0x20 and status2 != "UNMAPPED":
+                            negativeStrand2 = True
                         else:
+                            negativeStrand2 = False
+        
+                        if flag & 0x1:
+                            if flag & 0x40:
+                                mateId = 0
+                            elif flag & 0x80:
+                                mateId = 1
+                        else:
+                            mateId = -1
+        
+                        try:
+                            if mateId == 1:
+                                chr2 = mateLocations[tabSplit[0]][0]["chr2"]
+                                lo2 = mateLocations[tabSplit[0]][0]["lo"]
+                                hi2 = mateLocations[tabSplit[0]][0]["hi"]
+                            elif mateId == 0:
+                                chr2 = mateLocations[tabSplit[0]][1]["chr2"]
+                                lo2 = mateLocations[tabSplit[0]][1]["lo"]
+                                hi2 = mateLocations[tabSplit[0]][1]["hi"]
+                            else:
+                                chr2 = reportedChr2
+                                lo2 = reportedLo2
+                                hi2 = reportedHi2
+                        except:
                             chr2 = reportedChr2
                             lo2 = reportedLo2
                             hi2 = reportedHi2
-                    except:
-                        chr2 = reportedChr2
-                        lo2 = reportedLo2
-                        hi2 = reportedHi2
-                    recalibratedTable.add_rows([[sequence, name, qual, status, chr, lo, hi, negativeStrand, mapq, qcFail, duplicate, cigar, templateId, readGroup, mateId, status2, chr2, lo2, hi2, negativeStrand2, properPair]])
-                else:
-                    recalibratedTable.add_rows([[sequence, name, qual, status, chr, lo, hi, negativeStrand, mapq, qcFail, duplicate, cigar, templateId, readGroup]])
-                rowsWritten += 1
-                if rowsWritten%100000 == 0:
-                    print "Imported " + str(rowsWritten) + " rows. Time taken: " + str(int((time.time()-startTime)/60)) + " minutes"
-                    recalibratedTable.flush()
+                        recalibratedTable.add_rows([[sequence, name, qual, status, chr, lo, hi, negativeStrand, mapq, qcFail, duplicate, cigar, templateId, readGroup, mateId, status2, chr2, lo2, hi2, negativeStrand2, properPair]])
+                    else:
+                        recalibratedTable.add_rows([[sequence, name, qual, status, chr, lo, hi, negativeStrand, mapq, qcFail, duplicate, cigar, templateId, readGroup]])
+                    rowsWritten += 1
+                    if rowsWritten%100000 == 0:
+                        print "Imported " + str(rowsWritten) + " rows. Time taken: " + str(int((time.time()-startTime)/60)) + " minutes"
+                        recalibratedTable.flush()
+        except:
+            print line
+            raise dxpy.AppError("The resulting BAM may have had a trucated line. This may be the result of a random error and it's possible a retry of the same job will work.")
     recalibratedTable.flush()
     job['output']['ok'] = True
 

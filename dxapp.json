@@ -8,7 +8,7 @@
     {"name": "reference", "class": "record", "label":"Reference genome", "help":"The reference genome used to align the mappings", "type": "ContigSet"},
     {"name": "output_name", "class": "string", "label":"Output Name", "help":"The name given to the objects output by this app (optional; if not provided, they will be called after the input Mappings object)", "optional": true},
     
-    {"name": "dbsnp", "class": "file", "label":"dbSNP", "optional":true, "help":"The dbSNP database in VCF format (optionally block-compressed with bgzip).",
+    {"name": "dbsnp", "class": "file", "label":"dbSNP", "help":"The dbSNP database in VCF format (optionally block-compressed with bgzip).",
       "suggestions": [{"name": "b37 dbSNP", "project": "project-B406Bq0bQ9jB3GVk65200001", "path":"/b37/GATK helpers/dbSNP"},
                        {"name": "hg19 dbSNP", "project": "project-B406Bq0bQ9jB3GVk65200001", "path":"/hg19/GATK helpers/dbSNP"}],
       "patterns": ["*dbsnp*.vcf.gz", "*dbsnp*.vcf"]
@@ -100,7 +100,7 @@
     "buildDepends": [{"name": "libncurses5-dev"}],
     "systemRequirements":{"recalibrateVariants":{"instanceType":"dx_m1.xlarge"}}
   },
-  "version": "0.0.23",
+  "version": "0.0.24",
   "categories": [
     "Variation calling"
   ],

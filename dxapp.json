@@ -99,7 +99,7 @@
     "buildDepends": [{"name": "libncurses5-dev"}],
     "systemRequirements":{"recalibrateVariants":{"instanceType":"dx_m1.xlarge"}}
   },
-  "version": "0.0.18",
+  "version": "0.0.19",
   "categories": [
     "Variation calling"
   ],

@@ -670,7 +670,7 @@ def mapBestPractices():
     try:
         p = subprocess.Popen("tabix -f -p vcf dbsnp.vcf.gz", stderr=subprocess.PIPE, shell=True)
         if '[tabix] was bgzip' in p.communicate()[1]:
-            subprocess.check_call("gzip -d dbsnp.vcf.gz", shell=True)
+            subprocess.check_call("zcat -f dbsnp.vcf.gz > dbsnp.vcf && rm -f dbsnp.vcf.gz", shell=True)
             dbsnpFileName = 'dbsnp.vcf'
     except subprocess.CalledProcessError:
         raise dxpy.AppError("An error occurred decompressing dbSNP. Expected dbSNP as a gzipped file.")

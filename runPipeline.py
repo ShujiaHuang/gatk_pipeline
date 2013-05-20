@@ -916,11 +916,11 @@ def buildCommand(job):
     if job['input']['calculate_BAQ'] != "OFF":
         if job['input']['calculate_BAQ'] != "CALCULATE_AS_NECESSARY" and job['input']['calculate_BAQ'] != "RECALCULATE":
             raise dxpy.AppError("Option \"Calculate BAQ\" must be either \"OFF\" or or \"CALCULATE_AS_NECESSARY\" \"RECALCULATE\". Found " + job['input']['calculate_BAQ'] + " instead")
-        command += "-baq " + job['input']['calculate_BAQ']
+        command += " -baq " + job['input']['calculate_BAQ']
         if job['input']['BAQ_gap_open_penalty'] != 40.0:
-            command += "-baqGOP " + str(job['input']['BAQ_gap_open_penalty'])
+            command += " -baqGOP " + str(job['input']['BAQ_gap_open_penalty'])
     if job['input']['no_output_SLOD']:
-        command += "-nosl"
+        command += " -nosl"
 
     return command
 

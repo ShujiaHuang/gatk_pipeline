@@ -142,7 +142,7 @@ def main():
                 'call_multiple_samples': job['input']['call_multiple_samples'],
                 'discard_duplicates': job['input']['discard_duplicates'],
                 'parent_input': job['input'],
-                'deduplicate_interchromosome': (job['input']['deduplicate_interchromosome'] or chunks == 1),
+                'deduplicate_interchromosome': (job['input']['deduplicate_interchromosome'] and chunks != 1),
                 'gatk_command': gatkCommand,
                 'compress_reference': job['input']['compress_reference'],
                 'infer_no_call': job['input']['infer_no_call'],
@@ -243,7 +243,7 @@ def variantCallingCoordinator():
     for i in range(len(commandList)):
             if job['input']['intervals_merging'] != "INTERSECTION" and job["input"].get("intervals_to_include") != None and job["input"].get("intervals_to_include") != "":
                 commandList[i] = splitUserInputRegions(commandList[i], job['input']['intervals_to_include'], "-L")
-                commandList = filter(None, '')
+    commandList = [y for y in commandList if y != '']
                 
     chunks = len(commandList)
     
@@ -1137,6 +1137,8 @@ def mergeVcfs(vcfs):
 
 def mapGatk():
     os.environ['CLASSPATH'] = '/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/GenomeAnalysisTK.jar:opt/jar/CreateSequenceDictionary.jar'
+    
+    print job['input']['interval']
     
     regionFile = open("regions.txt", 'w')
     regionFile.write(job['input']['interval'])

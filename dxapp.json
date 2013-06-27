@@ -100,9 +100,9 @@
     "buildDepends": [{"name": "libncurses5-dev"}],
     "systemRequirements":{"recalibrateVariants":{"instanceType":"dx_m1.xlarge"}}
   },
-  "version": "0.0.30",
+  "version": "0.0.31",
   "categories": [
-    "Variation calling"
+    "Variation Calling"
   ],
   "details":{
     "upstreamAuthor": "Broad Institute",

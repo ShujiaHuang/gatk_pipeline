@@ -178,6 +178,18 @@ def main():
     if job["input"].get("gatk_resources") != None:
         job['output']['recalibrated_variants'] = {'job': reduceJobId, 'field': 'recalibrated_variants_table'}
 
+def runAndCatchGATKError(command, shell=True):
+    # Added to capture any errors outputted by GATK
+    try:
+        subprocess.check_output(command, stderr=subprocess.STDOUT, shell=shell)
+    except subprocess.CalledProcessError, e:
+        print e 
+        error = '\n'.join([l for l in e.output.splitlines() if l.startswith('#####')])
+        if error: 
+            raise dxpy.AppError(error)
+        else: 
+            raise dxpy.AppInternalError(e)     
+
 def mappingsImportCoordinator():
     
     job['output'] = {"import_jobs": []}
@@ -224,7 +236,7 @@ def variantCallingCoordinator():
                 mergeSamCommand += " INPUT=" + x
             print "Merge Command"
             print mergeSamCommand
-            subprocess.check_call(mergeSamCommand, shell=True)
+            runAndCatchGATKError(mergeSameCommand, shell=True)
 
         
     variantsTable = buildVariantsTable(job, mappingsTable, samples, dxpy.DXRecord(originalContigSet).get_id(), '')
@@ -578,7 +590,7 @@ def mapBestPractices():
         subprocess.check_call("samtools view -bS input.sam > input.bam", shell=True)
         subprocess.check_call("samtools sort input.bam input.sorted", shell=True)
         subprocess.check_call("mv input.sorted.bam input.bam", shell=True)
-        subprocess.check_call("java -Xmx4g net.sf.picard.sam.MarkDuplicates I=input.bam O=dedup.bam METRICS_FILE=metrics.txt ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT REMOVE_DUPLICATES=%s" % job["input"]["discard_duplicates"], shell=True)
+        runAndCatchGATKError("java -Xmx4g net.sf.picard.sam.MarkDuplicates I=input.bam O=dedup.bam METRICS_FILE=metrics.txt ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT REMOVE_DUPLICATES=%s" % job["input"]["discard_duplicates"])        
         print "Mark Duplicates completed in: " + str(int((time.time()-startTime)/60)) + " minutes"
     else:
         #Just take the header since that will allow merge with an empty file
@@ -630,7 +642,7 @@ def mapBestPractices():
         command += " --mismatchFraction " + str(job['input']['parent_input']['mismatch_fraction'])
 
     print command
-    subprocess.check_call(command, shell=True)
+    runAndCatchGATKError(command, shell=True)
 
     #Run the IndelRealigner
     command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T IndelRealigner -R ref.fa -I dedup.bam -targetIntervals indels.intervals -o realigned.bam"
@@ -658,7 +670,7 @@ def mapBestPractices():
         command += " --maxReadsForRealignment " + str(job['input']['parent_input']['max_reads_realignment'])
 
     print command
-    subprocess.check_call(command, shell=True)
+    runAndCatchGATKError(command, shell=True)
 
     # Download dbsnp
     startTime = time.time()
@@ -705,7 +717,7 @@ def mapBestPractices():
         command += " -cov ContextCovariate"
 
     print command
-    subprocess.check_call(command, shell=True)
+    runAndCatchGATKError(command, shell=True)
 
     #Table Recalibration
     command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T TableRecalibration -R ref.fa -recalFile recalibration.csv -I realigned.bam -o recalibrated.bam --doNotWriteOriginalQuals"
@@ -727,7 +739,7 @@ def mapBestPractices():
     if 'max_quality' in job['input']['parent_input']:
         command += " --max_quality_score " + str(job['input']['parent_input']['max_quality'])
     print command
-    subprocess.check_call(command, shell=True)
+    runAndCatchGATKError(command, shell=True)
 
     result = dxpy.upload_local_file("recalibrated.bam", wait_on_close=True)
     print "Recalibrated file: " + result.get_id()
@@ -972,7 +984,7 @@ def recalibrateVariants():
     os.environ['CLASSPATH'] = '/opt/jar/AddOrReplaceReadGroups.jar:/opt/jar/GenomeAnalysisTK.jar:opt/jar/CreateSequenceDictionary.jar'
     
     dxpy.download_dxfile(job['input']['reference_file'], "ref.fa")
-    subprocess.check_call("java -Xmx4g net.sf.picard.sam.CreateSequenceDictionary REFERENCE=ref.fa OUTPUT=ref.dict" ,shell=True)
+    runAndCatchGATKError("java -Xmx4g net.sf.picard.sam.CreateSequenceDictionary REFERENCE=ref.fa OUTPUT=ref.dict", shell=True)
     
     numVariants = mergeVcfs(job['input']['vcfs'])
     
@@ -1077,11 +1089,11 @@ def recalibrateVariants():
     
         # Do variant recalibration model
         print command
-        subprocess.check_call(command, shell=True)
+        runAndCatchGATKError(command, shell=True)
         
         # Apply variant recalibration model
         
-        subprocess.check_call("java -Xmx12g org.broadinstitute.sting.gatk.CommandLineGATK -T ApplyRecalibration -input merged.sorted.vcf -tranchesFile model.tranches -recalFile model.recal -R ref.fa -o recalibrated.vcf -ts_filter_level %s " % job["input"]["ts_filter_level"], shell = True)
+        runAndCatchGATKError("java -Xmx12g org.broadinstitute.sting.gatk.CommandLineGATK -T ApplyRecalibration -input merged.sorted.vcf -tranchesFile model.tranches -recalFile model.recal -R ref.fa -o recalibrated.vcf -ts_filter_level %s " % job["input"]["ts_filter_level"], shell = True)
         
         command = "dx_vcfToVariants2 --table_id %s --vcf_file recalibrated.vcf" % (recalibratedVariantsTable.get_id())
         if job['input']['compress_reference']:
@@ -1160,12 +1172,12 @@ def mapGatk():
 
     print "Indexing Reference"
     subprocess.check_call("samtools faidx ref.fa", shell=True)
-    subprocess.check_call("java -Xmx4g net.sf.picard.sam.CreateSequenceDictionary REFERENCE=ref.fa OUTPUT=ref.dict" ,shell=True)
+    runAndCatchGATKError("java -Xmx4g net.sf.picard.sam.CreateSequenceDictionary REFERENCE=ref.fa OUTPUT=ref.dict" ,shell=True)
 
     command = job['input']['command'] + job['input']['interval']
     #print command
     print "In GATK"
-    subprocess.check_call(command, shell=True)
+    runAndCatchGATKError(command, shell=True)
 
     command = "dx_vcfToVariants2 --table_id %s --vcf_file output.vcf --region_file regions.txt" % (job['input']['tableId'])
     if job['input']['compress_reference']:

@@ -236,7 +236,7 @@ def variantCallingCoordinator():
                 mergeSamCommand += " INPUT=" + x
             print "Merge Command"
             print mergeSamCommand
-            runAndCatchGATKError(mergeSameCommand, shell=True)
+            runAndCatchGATKError(mergeSamCommand, shell=True)
 
         
     variantsTable = buildVariantsTable(job, mappingsTable, samples, dxpy.DXRecord(originalContigSet).get_id(), '')

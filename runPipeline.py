@@ -184,7 +184,7 @@ def runAndCatchGATKError(command, shell=True):
         subprocess.check_output(command, stderr=subprocess.STDOUT, shell=shell)
     except subprocess.CalledProcessError, e:
         print e 
-        error = '\n'.join([l for l in e.output.splitlines() if l.startswith('#####')])
+        error = '\n'.join([l for l in e.output.splitlines() if l.startswith('##### ERROR MESSAGE:')])
         if error: 
             raise dxpy.AppError(error)
         else: 

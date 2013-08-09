@@ -186,9 +186,9 @@ def runAndCatchGATKError(command, shell=True):
         print e 
         error = '\n'.join([l for l in e.output.splitlines() if l.startswith('##### ERROR MESSAGE:')])
         if error: 
-            raise dxpy.AppError(error)
+            raise dxpy.AppError("App failed with GATK error. Please see logs for more information: {err}".format(err=error))
         else: 
-            raise dxpy.AppInternalError(e)     
+            raise dxpy.AppInternalError("App failed with error. Please see logs for more information: {err}".format(err=e))         
 
 def mappingsImportCoordinator():
     
@@ -608,7 +608,7 @@ def mapBestPractices():
     subprocess.check_call("samtools index dedup.bam", shell=True)
 
     #RealignerTargetCreator
-    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T RealignerTargetCreator -R ref.fa -I dedup.bam -o indels.intervals "
+    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T RealignerTargetCreator -R ref.fa -I dedup.bam -o indels.intervals -rf BadCigar"
     command += job['input']['interval']
 
     #Download the known indels
@@ -645,7 +645,7 @@ def mapBestPractices():
     runAndCatchGATKError(command, shell=True)
 
     #Run the IndelRealigner
-    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T IndelRealigner -R ref.fa -I dedup.bam -targetIntervals indels.intervals -o realigned.bam"
+    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T IndelRealigner -R ref.fa -I dedup.bam -targetIntervals indels.intervals -o realigned.bam -rf BadCigar"
     command += job['input']['interval']
     command += knownCommand
     if "consensus_model" in job['input']['parent_input']:
@@ -686,7 +686,7 @@ def mapBestPractices():
         raise dxpy.AppError("An error occurred while trying to index the provided dbSNP file with tabix. Please make sure the provided dbSNP file is a valid VCF file.")
 
     #Count Covariates
-    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T CountCovariates -R ref.fa -recalFile recalibration.csv -I realigned.bam -cov ReadGroupCovariate -cov QualityScoreCovariate -cov CycleCovariate -cov DinucCovariate --standard_covs"
+    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T CountCovariates -R ref.fa -recalFile recalibration.csv -I realigned.bam -cov ReadGroupCovariate -cov QualityScoreCovariate -cov CycleCovariate -cov DinucCovariate --standard_covs -rf BadCigar"
     command += " -knownSites " + dbsnpFileName
     command += job['input']['interval']
     if job['input']['parent_input'].get('single_threaded') != True:
@@ -720,7 +720,7 @@ def mapBestPractices():
     runAndCatchGATKError(command, shell=True)
 
     #Table Recalibration
-    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T TableRecalibration -R ref.fa -recalFile recalibration.csv -I realigned.bam -o recalibrated.bam --doNotWriteOriginalQuals"
+    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T TableRecalibration -R ref.fa -recalFile recalibration.csv -I realigned.bam -o recalibrated.bam --doNotWriteOriginalQuals -rf BadCigar"
     command += job['input']['interval']
     if "solid_recalibration_mode" in job['input']['parent_input']:
         if job['input']['parent_input']['solid_recalibration_mode'] != "":
@@ -877,7 +877,7 @@ def createNewMappingsTable(mappingsArray, recalibratedName):
 
 def buildCommand(job):
 
-    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T UnifiedGenotyper -R ref.fa -o output.vcf "
+    command = "java -Xmx4g org.broadinstitute.sting.gatk.CommandLineGATK -T UnifiedGenotyper -R ref.fa -o output.vcf -rf BadCigar"
     if job['input']['output_mode'] != "EMIT_VARIANTS_ONLY":
         command += " -out_mode " + (job['input']['output_mode'])
     if job['input']['call_confidence'] != 30.0:
